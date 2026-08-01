@@ -26,19 +26,34 @@ func TestUsername(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := Username(c.repoURL); got != c.want {
-				t.Errorf("Username(%q) = %q, want %q", c.repoURL, got, c.want)
+			if got := Username(c.repoURL, ""); got != c.want {
+				t.Errorf("Username(%q, empty) = %q, want %q", c.repoURL, got, c.want)
 			}
 		})
 	}
 }
 
 func TestBasicAuthCarriesToken(t *testing.T) {
-	auth := BasicAuth("https://gitee.com/cool-jiawei/aireboot.git", "tok123")
-	if auth.Username != "cool-jiawei" {
-		t.Errorf("username = %q, want cool-jiawei", auth.Username)
+	auth := BasicAuth("https://gitee.com/cool-jiawei/aireboot.git", "actual-account", "token-value")
+	if auth.Username != "actual-account" {
+		t.Errorf("username = %q, want actual-account", auth.Username)
 	}
-	if auth.Password != "tok123" {
+	if auth.Password != "token-value" {
 		t.Errorf("password not carried through")
+	}
+}
+
+func TestBasicAuthReturnsNilWithoutToken(t *testing.T) {
+	if auth := BasicAuth("file:///tmp/fixture", "", ""); auth != nil {
+		t.Fatalf("empty token should use anonymous access, got %+v", auth)
+	}
+}
+
+func TestUsernameUsesExplicitGiteeAccount(t *testing.T) {
+	if got := Username("https://gitee.com/university-org/private-repo.git", "actual-account"); got != "actual-account" {
+		t.Fatalf("Username() = %q, want actual-account", got)
+	}
+	if got := Username("https://github.com/org/private-repo.git", "actual-account"); got != "git" {
+		t.Fatalf("non-Gitee Username() = %q, want git", got)
 	}
 }

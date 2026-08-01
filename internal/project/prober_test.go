@@ -3,7 +3,9 @@ package project
 import (
 	"context"
 	"errors"
+	"net/url"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -12,7 +14,7 @@ import (
 // (且错误不含 token)。用 RFC2606 保留的不可解析主机,确保不真正触网外部服务。
 func TestProberUnreachable(t *testing.T) {
 	pr := goGitProber{}
-	_, err := pr.Probe(context.Background(), "https://nonexistent.invalid/foo/bar.git", "supersecrettoken")
+	_, err := pr.Probe(context.Background(), "https://nonexistent.invalid/foo/bar.git", "", "supersecrettoken")
 	if !errors.Is(err, ErrRepoUnreachable) {
 		t.Fatalf("err = %v, want ErrRepoUnreachable", err)
 	}
@@ -24,7 +26,7 @@ func TestProberUnreachable(t *testing.T) {
 // TestProberEmptyURL 验证空 URL 立即判不可达,不触网。
 func TestProberEmptyURL(t *testing.T) {
 	pr := goGitProber{}
-	if _, err := pr.Probe(context.Background(), "   ", "tok"); !errors.Is(err, ErrRepoUnreachable) {
+	if _, err := pr.Probe(context.Background(), "   ", "", "tok"); !errors.Is(err, ErrRepoUnreachable) {
 		t.Fatalf("err = %v, want ErrRepoUnreachable", err)
 	}
 }
@@ -32,7 +34,7 @@ func TestProberEmptyURL(t *testing.T) {
 // TestProberSSRFRejectsFileScheme 验证生产路径(默认严格)拒绝 file:// scheme。
 func TestProberSSRFRejectsFileScheme(t *testing.T) {
 	pr := goGitProber{} // 生产默认:allowInsecureSchemes=false
-	if _, err := pr.Probe(context.Background(), "file:///etc/passwd", ""); !errors.Is(err, ErrRepoUnreachable) {
+	if _, err := pr.Probe(context.Background(), "file:///etc/passwd", "", ""); !errors.Is(err, ErrRepoUnreachable) {
 		t.Fatalf("file:// 应被拒为 ErrRepoUnreachable, got %v", err)
 	}
 }
@@ -41,7 +43,7 @@ func TestProberSSRFRejectsFileScheme(t *testing.T) {
 func TestProberSSRFRejectsNonHTTPScheme(t *testing.T) {
 	pr := goGitProber{}
 	for _, u := range []string{"ssh://git@host/repo.git", "git://host/repo.git", "ftp://host/x"} {
-		if _, err := pr.Probe(context.Background(), u, "tok"); !errors.Is(err, ErrRepoUnreachable) {
+		if _, err := pr.Probe(context.Background(), u, "", "tok"); !errors.Is(err, ErrRepoUnreachable) {
 			t.Fatalf("%s 应被拒为 ErrRepoUnreachable, got %v", u, err)
 		}
 	}
@@ -55,7 +57,7 @@ func TestProberSSRFRejectsMetadataAndLoopback(t *testing.T) {
 		"https://127.0.0.1/repo.git",
 		"http://[::1]/repo.git",
 	} {
-		if _, err := pr.Probe(context.Background(), u, "tok"); !errors.Is(err, ErrRepoUnreachable) {
+		if _, err := pr.Probe(context.Background(), u, "", "tok"); !errors.Is(err, ErrRepoUnreachable) {
 			t.Fatalf("%s 应被拒为 ErrRepoUnreachable, got %v", u, err)
 		}
 	}
@@ -102,11 +104,19 @@ func TestProberLocalBareRepo(t *testing.T) {
 
 	// file:// 本地夹具走 test-only 注入例外(生产路径默认严格拒 file://)。
 	pr := goGitProber{allowInsecureSchemes: true}
-	branch, err := pr.Probe(context.Background(), "file://"+dir, "")
+	branch, err := pr.Probe(context.Background(), localFileURL(dir), "", "")
 	if err != nil {
 		t.Fatalf("Probe local repo: %v", err)
 	}
 	if branch != "trunk" {
 		t.Fatalf("defaultBranch = %q, want trunk", branch)
 	}
+}
+
+func localFileURL(path string) string {
+	path = filepath.ToSlash(path)
+	if filepath.VolumeName(path) != "" {
+		path = "/" + path
+	}
+	return (&url.URL{Scheme: "file", Path: path}).String()
 }

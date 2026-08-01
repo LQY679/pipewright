@@ -364,7 +364,7 @@ func main() {
 		var specLoader dagrun.SpecLoader = pacSpecLoader{pacloader.New(
 			pipelineSvc,
 			pacProjectLookup{projectSvc},
-			credVault, // vault.Vault 满足 TokenRevealer(Reveal)
+			pacGitAuthResolver{vault: credVault},
 			pacBlobFetcher{httpapi.NewSourceReader()},
 			pacGlobalOverride,
 		)}
@@ -693,11 +693,21 @@ func (p pacProjectLookup) Lookup(ctx context.Context, projectID string) (pacload
 	}, nil
 }
 
-// pacBlobFetcher 把 httpapi.SourceReader 适配为 pacloader.BlobFetcher(只取所需字段;token 不外泄)。
+type pacGitAuthResolver struct{ vault vault.Vault }
+
+func (r pacGitAuthResolver) GetGitAuth(credentialID string) (string, string, error) {
+	auth, err := r.vault.GetGitAuth(credentialID)
+	if err != nil {
+		return "", "", err
+	}
+	return auth.Username, auth.Token, nil
+}
+
+// pacBlobFetcher adapts SourceReader for pacloader without exposing credentials.
 type pacBlobFetcher struct{ reader httpapi.SourceReader }
 
-func (b pacBlobFetcher) FetchBlob(ctx context.Context, repoURL, token, ref, file string) (string, bool, error) {
-	blob, err := b.reader.Blob(ctx, repoURL, token, ref, file)
+func (b pacBlobFetcher) FetchBlob(ctx context.Context, repoURL, username, token, ref, file string) (string, bool, error) {
+	blob, err := b.reader.Blob(ctx, repoURL, username, token, ref, file)
 	if err != nil {
 		return "", false, err
 	}

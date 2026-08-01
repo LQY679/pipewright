@@ -19,11 +19,11 @@ type fakeRefsLister struct {
 	err     error
 }
 
-func (f fakeRefsLister) ListRefs(_ context.Context, _, _ string) (*repocache.Refs, error) {
+func (f fakeRefsLister) ListRefs(_ context.Context, _, _, _ string) (*repocache.Refs, error) {
 	return f.refs, f.err
 }
 
-func (f fakeRefsLister) ListCommits(_ context.Context, _, _, _ string, _ int) ([]repocache.Commit, error) {
+func (f fakeRefsLister) ListCommits(_ context.Context, _, _, _, _ string, _ int) ([]repocache.Commit, error) {
 	return f.commits, f.err
 }
 

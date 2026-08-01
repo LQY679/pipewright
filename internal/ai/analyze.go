@@ -70,7 +70,7 @@ type RepoAnalysis struct {
 type RepoAnalyzer interface {
 	// Analyze 用 token 浅克隆 repoURL 读 manifest;克隆失败返回 Cloned=false 的降级分析
 	// (不返回错误,健壮降级)。token 进程内取用、用完即弃,绝不进结果/日志/错误。
-	Analyze(ctx context.Context, repoURL, token string) RepoAnalysis
+	Analyze(ctx context.Context, repoURL, username, token string) RepoAnalysis
 }
 
 // goGitAnalyzer 是基于 go-git CloneContext 的 RepoAnalyzer 实现。
@@ -91,7 +91,7 @@ func newInsecureRepoAnalyzer() RepoAnalyzer {
 }
 
 // Analyze 浅克隆仓库并检测技术栈;失败优雅降级为 Cloned=false。
-func (a goGitAnalyzer) Analyze(ctx context.Context, repoURL, token string) RepoAnalysis {
+func (a goGitAnalyzer) Analyze(ctx context.Context, repoURL, username, token string) RepoAnalysis {
 	repoURL = strings.TrimSpace(repoURL)
 	if repoURL == "" {
 		return RepoAnalysis{Cloned: false, Signals: []string{}, DegradeReason: "仓库地址为空,无法克隆分析"}
@@ -107,7 +107,7 @@ func (a goGitAnalyzer) Analyze(ctx context.Context, repoURL, token string) RepoA
 	fs := memfs.New()
 	storer := memory.NewStorage()
 
-	auth := gitauth.BasicAuth(repoURL, token)
+	auth := gitauth.BasicAuth(repoURL, username, token)
 
 	cctx, cancel := context.WithTimeout(ctx, cloneTimeout)
 	defer cancel()

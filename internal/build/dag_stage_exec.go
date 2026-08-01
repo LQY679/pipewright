@@ -18,6 +18,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/run"
+	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
 // dag_stage_exec.go 是 DAG 调度器(dagrun)的**真实阶段执行器**(Epic 8 · Story 8-2)。
@@ -182,10 +183,9 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 			workspace = ws
 			defer func() { _ = os.RemoveAll(workspace) }() // 宿主零污染
 
-			token := b.revealToken(proj.CredentialID)
-			resolved, cerr := b.cloner.Clone(ctx, proj.RepoURL, token, r.Trigger.Branch, r.Trigger.Commit, workspace)
-			token = "" // 明文用完即弃
-			_ = token
+			auth := b.revealGitAuth(proj.CredentialID)
+			resolved, cerr := b.cloner.Clone(ctx, proj.RepoURL, auth.Username, auth.Token, r.Trigger.Branch, r.Trigger.Commit, workspace)
+			auth = vault.GitAuth{}
 			if cerr != nil {
 				if errors.Is(ctx.Err(), context.Canceled) {
 					return run.ErrCanceled
@@ -482,10 +482,9 @@ func (b *Builder) cloneJobWorkspace(ctx context.Context, r *run.Run, proj *proje
 	}
 	cleanup := func() { _ = os.RemoveAll(ws) }
 
-	token := b.revealToken(proj.CredentialID)
-	resolved, cerr := b.cloner.Clone(ctx, proj.RepoURL, token, r.Trigger.Branch, r.Trigger.Commit, ws)
-	token = "" // 明文用完即弃
-	_ = token
+	auth := b.revealGitAuth(proj.CredentialID)
+	resolved, cerr := b.cloner.Clone(ctx, proj.RepoURL, auth.Username, auth.Token, r.Trigger.Branch, r.Trigger.Commit, ws)
+	auth = vault.GitAuth{}
 	if cerr != nil {
 		cleanup()
 		if errors.Is(ctx.Err(), context.Canceled) {

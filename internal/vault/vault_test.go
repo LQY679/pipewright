@@ -191,6 +191,30 @@ func TestGetNotFound(t *testing.T) {
 	}
 }
 
+func TestGetGitAuthKeepsUsernameAndToken(t *testing.T) {
+	v := New(testDB(t), testKey())
+	cred, err := v.Create(CreateInput{
+		Name: "gitee token", Type: TypeGitToken, Username: "actual-account", Secret: "token-value",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if cred.Username != "actual-account" {
+		t.Fatalf("created username = %q", cred.Username)
+	}
+	auth, err := v.GetGitAuth(cred.ID)
+	if err != nil {
+		t.Fatalf("GetGitAuth: %v", err)
+	}
+	if auth.Username != "actual-account" || auth.Token != "token-value" {
+		t.Fatalf("GetGitAuth = %+v", auth)
+	}
+	listed, err := v.List()
+	if err != nil || len(listed) != 1 || listed[0].Username != "actual-account" {
+		t.Fatalf("List = %+v, err = %v", listed, err)
+	}
+}
+
 // TestACSEC01_NoPlaintextInDB 是 AC-SEC-01 核心回归:
 // 创建含 PEM 私钥的凭据后,遍历整库**所有表所有列** dump,grep 不到明文/PEM 头。
 func TestACSEC01_NoPlaintextInDB(t *testing.T) {

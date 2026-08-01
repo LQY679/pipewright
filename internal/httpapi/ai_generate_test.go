@@ -66,7 +66,7 @@ type stubAnalyzer struct {
 	res ai.RepoAnalysis
 }
 
-func (a stubAnalyzer) Analyze(context.Context, string, string) ai.RepoAnalysis { return a.res }
+func (a stubAnalyzer) Analyze(context.Context, string, string, string) ai.RepoAnalysis { return a.res }
 
 // sampleProposal 是一份合法提案(node:22 + main→生产)。
 func sampleProposal() *ai.Proposal {

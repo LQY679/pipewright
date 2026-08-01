@@ -20,7 +20,7 @@ type stubProber struct {
 	err    error
 }
 
-func (s stubProber) Probe(_ context.Context, _ string, _ string) (string, error) {
+func (s stubProber) Probe(_ context.Context, _ string, _ string, _ string) (string, error) {
 	return s.branch, s.err
 }
 

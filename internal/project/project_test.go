@@ -26,14 +26,16 @@ func testDB(t *testing.T) *sql.DB {
 
 // stubProber 是可编程的远端探测器(避免测试触网)。
 type stubProber struct {
-	branch string
-	err    error
-	calls  int
-	lastTo string // 最近一次的 token(用于断言不为空 / 进程内取用)
+	branch       string
+	err          error
+	calls        int
+	lastUsername string
+	lastTo       string // 最近一次的 token(用于断言不为空 / 进程内取用)
 }
 
-func (s *stubProber) Probe(_ context.Context, _ /*repoURL*/ string, token string) (string, error) {
+func (s *stubProber) Probe(_ context.Context, _ /*repoURL*/ string, username, token string) (string, error) {
 	s.calls++
+	s.lastUsername = username
 	s.lastTo = token
 	return s.branch, s.err
 }
@@ -46,6 +48,29 @@ func newCred(t *testing.T, v vault.Vault, secret string) string {
 		t.Fatalf("vault.Create: %v", err)
 	}
 	return c.ID
+}
+
+func TestCreatePassesGiteeUsernameToProber(t *testing.T) {
+	db := testDB(t)
+	v := vault.New(db, testMasterKey())
+	pr := &stubProber{branch: "main"}
+	svc := New(db, v, pr)
+	cred, err := v.Create(vault.CreateInput{
+		Name: "gitee token", Type: vault.TypeGitToken, Username: "actual-account", Secret: "token-value",
+	})
+	if err != nil {
+		t.Fatalf("vault.Create: %v", err)
+	}
+
+	_, err = svc.Create(context.Background(), CreateInput{
+		Name: "org repo", RepoURL: "https://gitee.com/university-org/private-repo.git", CredentialID: cred.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if pr.lastUsername != "actual-account" {
+		t.Fatalf("prober username = %q, want actual-account", pr.lastUsername)
+	}
 }
 
 func TestCreateAndList(t *testing.T) {

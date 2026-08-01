@@ -51,7 +51,7 @@ type CloneResolved struct {
 // 策略:先克隆默认/指定分支(Depth:1 浅克隆省带宽),若指定了 commit 则再 checkout 到该 commit
 //
 //	(commit 不在浅克隆历史里时回退为不限深克隆重试一次,best-effort)。
-func (c *Cloner) Clone(ctx context.Context, repoURL, token, branch, commit, destDir string) (*CloneResolved, error) {
+func (c *Cloner) Clone(ctx context.Context, repoURL, username, token, branch, commit, destDir string) (*CloneResolved, error) {
 	repoURL = strings.TrimSpace(repoURL)
 	if repoURL == "" {
 		return nil, ErrCloneFailed
@@ -63,7 +63,7 @@ func (c *Cloner) Clone(ctx context.Context, repoURL, token, branch, commit, dest
 	cctx, cancel := context.WithTimeout(ctx, cloneTimeout)
 	defer cancel()
 
-	auth := gitauth.BasicAuth(repoURL, token)
+	auth := gitauth.BasicAuth(repoURL, username, token)
 	commit = strings.TrimSpace(commit)
 	branch = strings.TrimSpace(branch)
 

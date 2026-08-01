@@ -267,7 +267,7 @@ func cleanRelPaths(paths []string) []string {
 			continue
 		}
 		clean := filepath.Clean(p)
-		if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		if filepath.IsAbs(clean) || strings.HasPrefix(clean, "/") || strings.HasPrefix(clean, "\\") || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 			continue
 		}
 		if clean == "." || seen[clean] {

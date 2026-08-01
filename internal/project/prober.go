@@ -39,7 +39,7 @@ type goGitProber struct {
 // 安全:token 仅作为 BasicAuth.Password 经参数化 API 传入,绝不进 URL/日志/错误。
 // 失败统一映射为干净领域错误:鉴权类 → ErrCredentialError;其余(DNS/连接/不存在)
 // → ErrRepoUnreachable。返回的错误不 %w 原始错误,避免把含敏感细节的底层错误外泄。
-func (p goGitProber) Probe(ctx context.Context, repoURL, token string) (string, error) {
+func (p goGitProber) Probe(ctx context.Context, repoURL, username, token string) (string, error) {
 	if strings.TrimSpace(repoURL) == "" {
 		return "", ErrRepoUnreachable
 	}
@@ -56,7 +56,7 @@ func (p goGitProber) Probe(ctx context.Context, repoURL, token string) (string, 
 	})
 
 	// HTTPS token 鉴权:用户名按平台选取(Gitee 须真实账号名,其余 "git"),密码=token。见 gitauth 包。
-	auth := gitauth.BasicAuth(repoURL, token)
+	auth := gitauth.BasicAuth(repoURL, username, token)
 
 	// 硬超时:防黑洞 IP/慢 DNS 把请求 goroutine 挂死。
 	cctx, cancel := context.WithTimeout(ctx, probeTimeout)

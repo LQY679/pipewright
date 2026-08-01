@@ -20,6 +20,7 @@ export interface Credential {
   name: string
   type: CredentialType
   scope: string
+  username: string
   /** Server-computed mask, e.g. "ghp_••••a91f" — never plaintext. */
   maskedValue: string
   lastUsedAt: string | null
@@ -30,6 +31,7 @@ export interface CreateCredentialInput {
   name: string
   type: CredentialType
   scope: string
+  username?: string
   /** Plaintext secret — sent once on creation, never returned by the server. */
   secret: string
 }
@@ -37,6 +39,7 @@ export interface CreateCredentialInput {
 export interface UpdateCredentialInput {
   name?: string
   scope?: string
+  username?: string
   /** Providing secret rotates the key. */
   secret?: string
 }

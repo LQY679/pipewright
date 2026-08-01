@@ -67,7 +67,7 @@ func makeTwoCommitRepo(t *testing.T) (string, []string) {
 	if out, e := cmd.CombinedOutput(); e != nil {
 		t.Fatalf("clone bare: %v\n%s", e, out)
 	}
-	return "file://" + bareRepo, []string{baseSha, curSha}
+	return localFileURL(bareRepo), []string{baseSha, curSha}
 }
 
 // seedDiffProject 直插一个项目(file:// repoURL,绕过 SSRF/probe),返回 project id。

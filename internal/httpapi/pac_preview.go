@@ -78,14 +78,14 @@ func makePacPreviewHandler(d sourceDeps) http.HandlerFunc {
 		}
 
 		// 取仓库凭据(进程内取用即弃;取不到不致命 → 空 token 试公开仓库,与 pacloader 一致)。
-		token := ""
+		username, token := "", ""
 		if d.vault != nil && strings.TrimSpace(proj.CredentialID) != "" {
-			if t, terr := d.vault.Get(proj.CredentialID); terr == nil {
-				token = t
+			if auth, terr := d.vault.GetGitAuth(proj.CredentialID); terr == nil {
+				username, token = auth.Username, auth.Token
 			}
 		}
 
-		blob, berr := d.reader.Blob(r.Context(), proj.RepoURL, token, ref, pacPreviewFile)
+		blob, berr := d.reader.Blob(r.Context(), proj.RepoURL, username, token, ref, pacPreviewFile)
 		if berr != nil {
 			// 文件不存在 / 克隆失败 → found=false(运行时此路径会回退库内配置)。
 			// 绝不外泄底层错误(可能含 URL 凭据);valid=false、error 留空(非 YAML 问题)。
