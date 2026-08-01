@@ -27,9 +27,12 @@ import (
 const defaultUsername = "git"
 
 // BasicAuth 依据 repoURL 选择合适的 BasicAuth 用户名,密码恒为 token。
-// token 为空时仍返回非 nil（go-git 对匿名公开仓亦可,鉴权失败再由调用方映射干净错误)。
-func BasicAuth(repoURL, token string) *githttp.BasicAuth {
-	return &githttp.BasicAuth{Username: Username(repoURL), Password: token}
+// token 为空时返回 nil，让 go-git 按匿名公开仓访问。
+func BasicAuth(repoURL, username, token string) *githttp.BasicAuth {
+	if strings.TrimSpace(token) == "" {
+		return nil
+	}
+	return &githttp.BasicAuth{Username: Username(repoURL, username), Password: token}
 }
 
 // Username 返回该 repoURL 应使用的 BasicAuth 用户名。
@@ -37,7 +40,7 @@ func BasicAuth(repoURL, token string) *githttp.BasicAuth {
 //   - 其余 host:恒为 "git"(历史行为,不回归)。
 //
 // 解析失败 / 无 host 时回退 "git",绝不 panic。
-func Username(repoURL string) string {
+func Username(repoURL, explicitUsername string) string {
 	u, err := url.Parse(strings.TrimSpace(repoURL))
 	if err != nil {
 		return defaultUsername
@@ -47,6 +50,9 @@ func Username(repoURL string) string {
 		return defaultUsername
 	}
 	if host == "gitee.com" || strings.HasSuffix(host, ".gitee.com") {
+		if username := strings.TrimSpace(explicitUsername); username != "" {
+			return username
+		}
 		if owner := firstPathSegment(u.Path); owner != "" {
 			return owner
 		}

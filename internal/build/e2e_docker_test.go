@@ -36,7 +36,7 @@ type copyDockerfileCloner struct {
 	commitShort string
 }
 
-func (c *copyDockerfileCloner) Clone(_ context.Context, _, _, _, _, destDir string) (*CloneResolved, error) {
+func (c *copyDockerfileCloner) Clone(_ context.Context, _, _, _, _, _, destDir string) (*CloneResolved, error) {
 	if err := os.WriteFile(filepath.Join(destDir, "Dockerfile"), []byte(c.dockerfile), 0o644); err != nil {
 		return nil, err
 	}

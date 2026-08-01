@@ -38,6 +38,7 @@ const form = ref({
   name: '',
   type: 'git_token' as CredentialType,
   scope: '',
+  username: '',
   secret: '',
 })
 
@@ -210,7 +211,7 @@ onMounted(() => {
 function openAddModal(): void {
   modalMode.value = 'add'
   editingId.value = null
-  form.value = { name: '', type: 'git_token', scope: '', secret: '' }
+  form.value = { name: '', type: 'git_token', scope: '', username: '', secret: '' }
   clearFormErrors()
   formBanner.value = ''
   modalOpen.value = true
@@ -220,7 +221,7 @@ function openEditModal(c: Credential): void {
   modalMode.value = 'edit'
   editingId.value = c.id
   // secret is intentionally blank — user must re-enter to rotate
-  form.value = { name: c.name, type: c.type, scope: c.scope, secret: '' }
+  form.value = { name: c.name, type: c.type, scope: c.scope, username: c.username, secret: '' }
   editRevealed.value = null
   clearFormErrors()
   formBanner.value = ''
@@ -271,6 +272,7 @@ async function handleFormSubmit(): Promise<void> {
         name: form.value.name.trim(),
         type: form.value.type,
         scope: form.value.scope.trim(),
+        username: form.value.username.trim(),
         secret: form.value.secret,
       }
       const created = await createCredential(payload)
@@ -279,6 +281,7 @@ async function handleFormSubmit(): Promise<void> {
       const payload: UpdateCredentialInput = {
         name: form.value.name.trim(),
         scope: form.value.scope.trim(),
+        username: form.value.username.trim(),
       }
       // Only include secret if user typed something (rotation)
       if (form.value.secret) {
@@ -694,6 +697,23 @@ async function toggleEditReveal(): Promise<void> {
           </div>
 
           <!-- Secret — password type, never echoed back -->
+          <div v-if="form.type === 'git_token'" class="field">
+            <label class="field-label" for="cred-username">
+              {{ t('settingsVault.fieldGitUsername') }}
+              <span class="field-optional">{{ t('settingsVault.optional') }}</span>
+            </label>
+            <input
+              id="cred-username"
+              v-model="form.username"
+              class="field-input"
+              type="text"
+              :placeholder="t('settingsVault.gitUsernamePlaceholder')"
+              :disabled="formSubmitting"
+              autocomplete="username"
+            />
+            <span class="field-hint">{{ t('settingsVault.hintGitUsername') }}</span>
+          </div>
+
           <div class="field">
             <div class="field-label-row">
               <label class="field-label" for="cred-secret">

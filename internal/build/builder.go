@@ -81,7 +81,7 @@ type buildCacheStore interface {
 // repoCloner 抽象「把仓库在 ref 上克隆到磁盘工作区」的能力(便于 fake 单测注入,
 // 避免单测真触网)。默认实现是 *Cloner(go-git PlainClone + SSRF 收口)。
 type repoCloner interface {
-	Clone(ctx context.Context, repoURL, token, branch, commit, destDir string) (*CloneResolved, error)
+	Clone(ctx context.Context, repoURL, username, token, branch, commit, destDir string) (*CloneResolved, error)
 }
 
 // BuilderOption 配置 Builder(测试注入 fake driver/cloner)。
@@ -233,10 +233,9 @@ func (b *Builder) Run(ctx context.Context, r *run.Run, sink run.StepSink) error 
 	}
 	defer func() { _ = os.RemoveAll(workspace) }() // 宿主零污染
 
-	token := b.revealToken(proj.CredentialID)
-	resolved, cerr := b.cloner.Clone(ctx, proj.RepoURL, token, r.Trigger.Branch, r.Trigger.Commit, workspace)
-	token = "" // 明文用完即弃
-	_ = token
+	auth := b.revealGitAuth(proj.CredentialID)
+	resolved, cerr := b.cloner.Clone(ctx, proj.RepoURL, auth.Username, auth.Token, r.Trigger.Branch, r.Trigger.Commit, workspace)
+	auth = vault.GitAuth{}
 	if cerr != nil {
 		if errors.Is(ctx.Err(), context.Canceled) {
 			return b.cancelAt(ctx, sink, 0)
@@ -515,6 +514,17 @@ func (b *Builder) revealToken(credID string) string {
 		return ""
 	}
 	return pt
+}
+
+func (b *Builder) revealGitAuth(credID string) vault.GitAuth {
+	if credID == "" || b.vault == nil {
+		return vault.GitAuth{}
+	}
+	auth, err := b.vault.GetGitAuth(credID)
+	if err != nil {
+		return vault.GitAuth{}
+	}
+	return auth
 }
 
 // revealRegistryCred 取仓库凭据明文并解析为 user/password。凭据约定以 "user:password" 存储;

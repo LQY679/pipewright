@@ -50,6 +50,7 @@ type Credential struct {
 	Name        string
 	Type        string
 	Scope       string
+	Username    string
 	MaskedValue string
 	LastUsedAt  *time.Time
 	CreatedAt   time.Time
@@ -57,18 +58,25 @@ type Credential struct {
 
 // CreateInput 是创建凭据的入参(含明文 secret,不被持久化为明文)。
 type CreateInput struct {
-	Name   string
-	Type   string
-	Scope  string
-	Secret string
+	Name     string
+	Type     string
+	Scope    string
+	Username string
+	Secret   string
 }
 
 // UpdateInput 是更新凭据的入参;指针字段为 nil 表示不修改。
 // 给 Secret 即轮换密钥(重新加密)。
 type UpdateInput struct {
-	Name   *string
-	Scope  *string
-	Secret *string
+	Name     *string
+	Scope    *string
+	Username *string
+	Secret   *string
+}
+
+type GitAuth struct {
+	Username string
+	Token    string
 }
 
 // Vault 定义保险库领域对外接口。(-er 约定的同类:领域聚合用 Vault)
@@ -79,6 +87,7 @@ type Vault interface {
 	List() ([]Credential, error)
 	// Get 解密并返回指定凭据的明文,**仅供进程内领域调用**;同时更新 last_used_at。
 	Get(id string) (string, error)
+	GetGitAuth(id string) (GitAuth, error)
 	// Reveal 解密并返回指定凭据的明文,**不更新 last_used_at**(供脱敏登记等「只读取值、非真正使用」
 	// 的场景:把凭据明文登记进 Masker 以便日志/诊断/通知出网前替换为 [MASKED],不应算「最近使用」)。
 	// 未配置 master key → ErrVaultUnconfigured;不存在 → ErrNotFound;解密失败 → ErrDecrypt(不泄漏)。
@@ -149,9 +158,9 @@ func (s *service) Create(in CreateInput) (*Credential, error) {
 	nowStr := now.Format(time.RFC3339)
 
 	_, err = s.db.Exec(
-		`INSERT INTO credentials (id, name, type, scope, ciphertext, masked_value, last_used_at, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
-		id, in.Name, in.Type, in.Scope, sealed, masked, nowStr, nowStr,
+		`INSERT INTO credentials (id, name, type, scope, username, ciphertext, masked_value, last_used_at, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+		id, in.Name, in.Type, in.Scope, strings.TrimSpace(in.Username), sealed, masked, nowStr, nowStr,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("vault: insert credential: %w", err)
@@ -162,6 +171,7 @@ func (s *service) Create(in CreateInput) (*Credential, error) {
 		Name:        in.Name,
 		Type:        in.Type,
 		Scope:       in.Scope,
+		Username:    strings.TrimSpace(in.Username),
 		MaskedValue: masked,
 		LastUsedAt:  nil,
 		CreatedAt:   now,
@@ -173,7 +183,7 @@ func (s *service) List() ([]Credential, error) {
 		return nil, ErrVaultUnconfigured
 	}
 	rows, err := s.db.Query(
-		`SELECT id, name, type, scope, masked_value, last_used_at, created_at
+		`SELECT id, name, type, scope, username, masked_value, last_used_at, created_at
 		 FROM credentials ORDER BY created_at DESC, id`,
 	)
 	if err != nil {
@@ -218,6 +228,28 @@ func (s *service) Get(id string) (string, error) {
 }
 
 // Reveal 同 Get 但**不更新 last_used_at**(供脱敏登记等只读取值场景)。
+func (s *service) GetGitAuth(id string) (GitAuth, error) {
+	if !s.configured() {
+		return GitAuth{}, ErrVaultUnconfigured
+	}
+	var username string
+	var sealed []byte
+	err := s.db.QueryRow(`SELECT username, ciphertext FROM credentials WHERE id = ?`, id).Scan(&username, &sealed)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return GitAuth{}, ErrNotFound
+		}
+		return GitAuth{}, fmt.Errorf("vault: get git auth: %w", err)
+	}
+	plaintext, err := open(s.key, sealed)
+	if err != nil {
+		return GitAuth{}, err
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, _ = s.db.Exec(`UPDATE credentials SET last_used_at = ? WHERE id = ?`, now, id)
+	return GitAuth{Username: username, Token: string(plaintext)}, nil
+}
+
 func (s *service) Reveal(id string) (string, error) {
 	if !s.configured() {
 		return "", ErrVaultUnconfigured
@@ -258,10 +290,10 @@ func (s *service) Update(id string, in UpdateInput) (*Credential, error) {
 	}
 
 	// 先取出当前行(需 type 以便在轮换 secret 时重算掩码)。
-	var name, credType, scope, masked string
+	var name, credType, scope, username, masked string
 	err := s.db.QueryRow(
-		`SELECT name, type, scope, masked_value FROM credentials WHERE id = ?`, id,
-	).Scan(&name, &credType, &scope, &masked)
+		`SELECT name, type, scope, username, masked_value FROM credentials WHERE id = ?`, id,
+	).Scan(&name, &credType, &scope, &username, &masked)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
@@ -280,6 +312,9 @@ func (s *service) Update(id string, in UpdateInput) (*Credential, error) {
 	if in.Scope != nil {
 		scope = *in.Scope
 	}
+	if in.Username != nil {
+		username = strings.TrimSpace(*in.Username)
+	}
 	if in.Secret != nil {
 		if *in.Secret == "" {
 			return nil, ErrEmptySecret
@@ -296,13 +331,13 @@ func (s *service) Update(id string, in UpdateInput) (*Credential, error) {
 	nowStr := time.Now().UTC().Format(time.RFC3339)
 	if rotate {
 		_, err = s.db.Exec(
-			`UPDATE credentials SET name = ?, scope = ?, ciphertext = ?, masked_value = ?, updated_at = ? WHERE id = ?`,
-			name, scope, newSealed, masked, nowStr, id,
+			`UPDATE credentials SET name = ?, scope = ?, username = ?, ciphertext = ?, masked_value = ?, updated_at = ? WHERE id = ?`,
+			name, scope, username, newSealed, masked, nowStr, id,
 		)
 	} else {
 		_, err = s.db.Exec(
-			`UPDATE credentials SET name = ?, scope = ?, updated_at = ? WHERE id = ?`,
-			name, scope, nowStr, id,
+			`UPDATE credentials SET name = ?, scope = ?, username = ?, updated_at = ? WHERE id = ?`,
+			name, scope, username, nowStr, id,
 		)
 	}
 	if err != nil {
@@ -368,7 +403,7 @@ func (s *service) OpenSecret(sealed []byte) ([]byte, error) {
 // getView 回读单条凭据的掩码视图。
 func (s *service) getView(id string) (*Credential, error) {
 	row := s.db.QueryRow(
-		`SELECT id, name, type, scope, masked_value, last_used_at, created_at
+		`SELECT id, name, type, scope, username, masked_value, last_used_at, created_at
 		 FROM credentials WHERE id = ?`, id,
 	)
 	c, err := scanCredential(row)
@@ -391,7 +426,7 @@ func scanCredential(sc scanner) (*Credential, error) {
 	var c Credential
 	var lastUsedStr sql.NullString
 	var createdStr string
-	if err := sc.Scan(&c.ID, &c.Name, &c.Type, &c.Scope, &c.MaskedValue, &lastUsedStr, &createdStr); err != nil {
+	if err := sc.Scan(&c.ID, &c.Name, &c.Type, &c.Scope, &c.Username, &c.MaskedValue, &lastUsedStr, &createdStr); err != nil {
 		return nil, err
 	}
 	created, err := time.Parse(time.RFC3339, createdStr)

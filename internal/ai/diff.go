@@ -97,13 +97,13 @@ type RunDiffer interface {
 	// Diff 克隆 repoURL,解析 baselineCommit→currentCommit 两 tree,算文件级 diff。
 	// 克隆失败 / commit 不可达返回 Available=false 的降级结果(不返回错误,健壮降级)。
 	// token 进程内取用、用完即弃,绝不进结果/日志/错误。
-	Diff(ctx context.Context, repoURL, token, baselineCommit, currentCommit string) RunDiff
+	Diff(ctx context.Context, repoURL, username, token, baselineCommit, currentCommit string) RunDiff
 
 	// DiffCommit 算「该 commit 自身」的文件级 diff(= commit 相对其首个父提交;根提交=相对空树,
 	// 即全部新增)。这是「本次提交改了什么」(git show 语义),不依赖任何 baseline 运行,故成功/
 	// 失败运行都恒可展示。返回 (diff, 父提交 SHA);根提交或降级时父 SHA 为空。
 	// 克隆失败 / commit 不可达 → Available=false 降级(不返回错误)。token 用完即弃,绝不出网。
-	DiffCommit(ctx context.Context, repoURL, token, commit string) (RunDiff, string)
+	DiffCommit(ctx context.Context, repoURL, username, token, commit string) (RunDiff, string)
 }
 
 // goGitDiffer 是基于 go-git 的 RunDiffer 实现。
@@ -124,7 +124,7 @@ func newInsecureRunDiffer() RunDiffer { return goGitDiffer{allowInsecure: true} 
 func NewInsecureRunDifferForTest() RunDiffer { return goGitDiffer{allowInsecure: true} }
 
 // Diff 克隆仓库并算 baseline→current 的文件级 diff;失败优雅降级为 Available=false。
-func (d goGitDiffer) Diff(ctx context.Context, repoURL, token, baselineCommit, currentCommit string) RunDiff {
+func (d goGitDiffer) Diff(ctx context.Context, repoURL, username, token, baselineCommit, currentCommit string) RunDiff {
 	repoURL = strings.TrimSpace(repoURL)
 	baselineCommit = strings.TrimSpace(baselineCommit)
 	currentCommit = strings.TrimSpace(currentCommit)
@@ -147,7 +147,7 @@ func (d goGitDiffer) Diff(ctx context.Context, repoURL, token, baselineCommit, c
 	// 克隆到内存(不设 Depth:浅克隆 HEAD 取不到任意历史 commit;此处需两个具体 commit 的 tree,
 	// 故取全量历史。内存 storer 限驻留,用完即随 GC 释放)。
 	storer := memory.NewStorage()
-	auth := gitauth.BasicAuth(repoURL, token)
+	auth := gitauth.BasicAuth(repoURL, username, token)
 	repo, err := gogit.CloneContext(cctx, storer, memfs.New(), &gogit.CloneOptions{
 		URL:  repoURL,
 		Auth: auth,
@@ -175,7 +175,7 @@ func (d goGitDiffer) Diff(ctx context.Context, repoURL, token, baselineCommit, c
 
 // DiffCommit 算「该 commit 自身」的文件级 diff(commit 相对其首个父;根提交相对空树=全新增)。
 // 复用 Diff 的克隆 / SSRF 收口 / 降级语义;额外返回父提交 SHA(供上层填 baselineCommit 上下文)。
-func (d goGitDiffer) DiffCommit(ctx context.Context, repoURL, token, commit string) (RunDiff, string) {
+func (d goGitDiffer) DiffCommit(ctx context.Context, repoURL, username, token, commit string) (RunDiff, string) {
 	repoURL = strings.TrimSpace(repoURL)
 	commit = strings.TrimSpace(commit)
 
@@ -193,7 +193,7 @@ func (d goGitDiffer) DiffCommit(ctx context.Context, repoURL, token, commit stri
 	defer cancel()
 
 	storer := memory.NewStorage()
-	auth := gitauth.BasicAuth(repoURL, token)
+	auth := gitauth.BasicAuth(repoURL, username, token)
 	repo, err := gogit.CloneContext(cctx, storer, memfs.New(), &gogit.CloneOptions{
 		URL:  repoURL,
 		Auth: auth,

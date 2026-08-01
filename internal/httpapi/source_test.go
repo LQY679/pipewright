@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -55,7 +56,15 @@ func makeBareSourceRepo(t *testing.T, files map[string]string) string {
 	bare := t.TempDir()
 	bareRepo := filepath.Join(bare, "repo.git")
 	runGit(bare, "clone", "-q", "--bare", work, bareRepo)
-	return "file://" + bareRepo
+	return localFileURL(bareRepo)
+}
+
+func localFileURL(path string) string {
+	path = filepath.ToSlash(path)
+	if filepath.VolumeName(path) != "" {
+		path = "/" + path
+	}
+	return (&url.URL{Scheme: "file", Path: path}).String()
 }
 
 // seedSourceProject 直接插一个项目(file:// repoURL),绕过 SSRF/probe,返回 project id。

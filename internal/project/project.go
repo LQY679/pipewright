@@ -108,7 +108,7 @@ type RemoteProber interface {
 	// Probe 用 token 对 repoURL 做 ListRemote(HTTPS + token auth),
 	// 成功返回远端默认分支(可能为空字符串);失败返回 ErrCredentialError /
 	// ErrRepoUnreachable(绝不含明文/凭据)。
-	Probe(ctx context.Context, repoURL, token string) (defaultBranch string, err error)
+	Probe(ctx context.Context, repoURL, username, token string) (defaultBranch string, err error)
 }
 
 // Service 定义项目领域对外接口。
@@ -171,7 +171,7 @@ func (s *service) probe(ctx context.Context, repoURL, credentialID string) (stri
 	if s.vault == nil {
 		return "", ErrVaultUnconfigured
 	}
-	token, err := s.vault.Get(credentialID)
+	auth, err := s.vault.GetGitAuth(credentialID)
 	if err != nil {
 		switch {
 		case errors.Is(err, vault.ErrVaultUnconfigured):
@@ -183,7 +183,8 @@ func (s *service) probe(ctx context.Context, repoURL, credentialID string) (stri
 			return "", ErrCredentialError
 		}
 	}
-	branch, perr := s.prober.Probe(ctx, repoURL, token)
+	token := auth.Token
+	branch, perr := s.prober.Probe(ctx, repoURL, auth.Username, token)
 	token = "" // 显式清引用,尽早不可达(明文不留)
 	_ = token
 	return branch, perr

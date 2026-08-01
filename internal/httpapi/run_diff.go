@@ -128,16 +128,16 @@ func makeRunDiffHandler(d runDiffDeps) http.HandlerFunc {
 				degradedDiffDTO("无法读取项目仓库信息,暂时无法计算差异", "", "", currentCommit))
 			return
 		}
-		token := ""
+		username, token := "", ""
 		if d.vault != nil && strings.TrimSpace(proj.CredentialID) != "" {
-			if t, terr := d.vault.Get(proj.CredentialID); terr == nil {
-				token = t
+			if auth, terr := d.vault.GetGitAuth(proj.CredentialID); terr == nil {
+				username, token = auth.Username, auth.Token
 			}
 		}
 
 		// 「本次提交自身」diff(git show 语义:相对首个父提交;根提交=全新增)。不依赖任何 baseline
 		// 运行,故成功/失败运行都恒可展示「这次改了什么」。parentCommit 回填 baselineCommit 作上下文。
-		diff, parentCommit := d.differ.DiffCommit(ctx, proj.RepoURL, token, currentCommit)
+		diff, parentCommit := d.differ.DiffCommit(ctx, proj.RepoURL, username, token, currentCommit)
 		writeJSON(w, http.StatusOK, toRunDiffDTO(diff, "", parentCommit, currentCommit))
 	}
 }

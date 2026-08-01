@@ -49,6 +49,14 @@ func (f fakeVault) Reveal(id string) (string, error) {
 	return "", vault.ErrNotFound
 }
 
+func (f fakeVault) GetGitAuth(id string) (vault.GitAuth, error) {
+	token, err := f.Reveal(id)
+	if err != nil {
+		return vault.GitAuth{}, err
+	}
+	return vault.GitAuth{Token: token}, nil
+}
+
 // recordedLog 是一条被 sink 记录的日志行。
 type recordedLog struct {
 	stream  string
@@ -245,7 +253,7 @@ type stubCloner struct {
 
 func newSuccessCloner(commitShort string) *stubCloner { return &stubCloner{commitShort: commitShort} }
 
-func (c *stubCloner) Clone(_ context.Context, _, _, _, _, _ string) (*CloneResolved, error) {
+func (c *stubCloner) Clone(_ context.Context, _, _, _, _, _, _ string) (*CloneResolved, error) {
 	if c.err != nil {
 		return nil, c.err
 	}

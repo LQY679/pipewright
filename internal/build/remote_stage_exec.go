@@ -26,6 +26,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/dagrun"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/run"
+	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
 // RunnerLookup 解析某项目的远程 runner 服务器 id(空/false = 本地构建)。runner.Service 即满足。
@@ -83,10 +84,9 @@ func (b *Builder) runStageRemote(ctx context.Context, r *run.Run, stage pipeline
 	}
 	defer func() { _ = os.RemoveAll(workspace) }()
 
-	token := b.revealToken(proj.CredentialID)
-	resolved, cerr := b.cloner.Clone(ctx, proj.RepoURL, token, r.Trigger.Branch, r.Trigger.Commit, workspace)
-	token = ""
-	_ = token
+	auth := b.revealGitAuth(proj.CredentialID)
+	resolved, cerr := b.cloner.Clone(ctx, proj.RepoURL, auth.Username, auth.Token, r.Trigger.Branch, r.Trigger.Commit, workspace)
+	auth = vault.GitAuth{}
 	if cerr != nil {
 		if errors.Is(ctx.Err(), context.Canceled) {
 			return run.ErrCanceled

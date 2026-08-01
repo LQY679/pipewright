@@ -17,6 +17,7 @@ type credentialDTO struct {
 	Name        string  `json:"name"`
 	Type        string  `json:"type"`
 	Scope       string  `json:"scope"`
+	Username    string  `json:"username"`
 	MaskedValue string  `json:"maskedValue"`
 	LastUsedAt  *string `json:"lastUsedAt"` // RFC3339 或 null
 	CreatedAt   string  `json:"createdAt"`
@@ -34,6 +35,7 @@ func toDTO(c *vault.Credential) credentialDTO {
 		Name:        c.Name,
 		Type:        c.Type,
 		Scope:       c.Scope,
+		Username:    c.Username,
 		MaskedValue: c.MaskedValue,
 		LastUsedAt:  lastUsed,
 		CreatedAt:   c.CreatedAt.UTC().Format(time.RFC3339),
@@ -91,20 +93,22 @@ func makeCreateCredentialHandler(v vault.Vault, aud audit.Recorder) http.Handler
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 私钥可能较大,放宽到 1MB
 		var req struct {
-			Name   string `json:"name"`
-			Type   string `json:"type"`
-			Scope  string `json:"scope"`
-			Secret string `json:"secret"`
+			Name     string `json:"name"`
+			Type     string `json:"type"`
+			Scope    string `json:"scope"`
+			Username string `json:"username"`
+			Secret   string `json:"secret"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
 			return
 		}
 		cred, err := v.Create(vault.CreateInput{
-			Name:   req.Name,
-			Type:   req.Type,
-			Scope:  req.Scope,
-			Secret: req.Secret,
+			Name:     req.Name,
+			Type:     req.Type,
+			Scope:    req.Scope,
+			Username: req.Username,
+			Secret:   req.Secret,
 		})
 		if err != nil {
 			writeVaultError(w, err)
@@ -133,18 +137,20 @@ func makeUpdateCredentialHandler(v vault.Vault, aud audit.Recorder) http.Handler
 		id := chi.URLParam(r, "id")
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		var req struct {
-			Name   *string `json:"name"`
-			Scope  *string `json:"scope"`
-			Secret *string `json:"secret"`
+			Name     *string `json:"name"`
+			Scope    *string `json:"scope"`
+			Username *string `json:"username"`
+			Secret   *string `json:"secret"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "请求体格式错误")
 			return
 		}
 		cred, err := v.Update(id, vault.UpdateInput{
-			Name:   req.Name,
-			Scope:  req.Scope,
-			Secret: req.Secret,
+			Name:     req.Name,
+			Scope:    req.Scope,
+			Username: req.Username,
+			Secret:   req.Secret,
 		})
 		if err != nil {
 			writeVaultError(w, err)

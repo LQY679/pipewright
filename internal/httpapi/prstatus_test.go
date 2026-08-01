@@ -18,7 +18,7 @@ import (
 // stubProberPR 是不触网的远端探测桩(本测试只走 SQL 种子 + Get/Update,实际不会被调用)。
 type stubProberPR struct{}
 
-func (stubProberPR) Probe(_ context.Context, _ /*repoURL*/ string, _ string) (string, error) {
+func (stubProberPR) Probe(_ context.Context, _ /*repoURL*/ string, _ string, _ string) (string, error) {
 	return "main", nil
 }
 

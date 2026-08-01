@@ -90,7 +90,7 @@ type markerCloner struct {
 	content string
 }
 
-func (c *markerCloner) Clone(_ context.Context, _, _, _, _, destDir string) (*CloneResolved, error) {
+func (c *markerCloner) Clone(_ context.Context, _, _, _, _, _, destDir string) (*CloneResolved, error) {
 	if c.file != "" {
 		_ = os.WriteFile(filepath.Join(destDir, c.file), []byte(c.content), 0o644)
 	}
@@ -684,7 +684,7 @@ type countingCloner struct {
 	n  int
 }
 
-func (c *countingCloner) Clone(_ context.Context, _, _, _, _, destDir string) (*CloneResolved, error) {
+func (c *countingCloner) Clone(_ context.Context, _, _, _, _, _, destDir string) (*CloneResolved, error) {
 	c.mu.Lock()
 	c.n++
 	c.mu.Unlock()

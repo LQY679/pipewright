@@ -32,26 +32,29 @@ func (f fakeProjects) Lookup(_ context.Context, _ string) (ProjectInfo, error) {
 }
 
 type fakeTokens struct {
-	token string
-	err   error
-	gotID string
+	username string
+	token    string
+	err      error
+	gotID    string
 }
 
-func (f *fakeTokens) Reveal(id string) (string, error) {
+func (f *fakeTokens) GetGitAuth(id string) (string, string, error) {
 	f.gotID = id
-	return f.token, f.err
+	return f.username, f.token, f.err
 }
 
 type fakeBlobs struct {
-	content  string
-	degraded bool
-	err      error
-	gotRef   string
-	gotFile  string
-	gotToken string
+	content     string
+	degraded    bool
+	err         error
+	gotRef      string
+	gotFile     string
+	gotUsername string
+	gotToken    string
 }
 
-func (f *fakeBlobs) FetchBlob(_ context.Context, _, token, ref, file string) (string, bool, error) {
+func (f *fakeBlobs) FetchBlob(_ context.Context, _, username, token, ref, file string) (string, bool, error) {
+	f.gotUsername = username
 	f.gotToken = token
 	f.gotRef = ref
 	f.gotFile = file
@@ -99,9 +102,22 @@ stages:
             - echo hi
 `
 
-func newLoader(stored *storedLoader, p ProjectLookup, t TokenRevealer, b BlobFetcher) *Loader {
+func newLoader(stored *storedLoader, p ProjectLookup, t GitAuthRevealer, b BlobFetcher) *Loader {
 	// 常规路径(每项目开关决定);defaultInfo() 默认 PacEnabled=true,故既有用例走覆盖路径。
 	return New(stored, p, t, b, false)
+}
+
+func TestGet_PassesGitUsernameToBlobFetcher(t *testing.T) {
+	stored := &storedLoader{cfg: storedCfg()}
+	blobs := &fakeBlobs{content: validYAML}
+	l := newLoader(stored, fakeProjects{info: defaultInfo()}, &fakeTokens{username: "account-name", token: "secret-token"}, blobs)
+
+	if _, _, err := l.Get(context.Background(), "proj-1", ""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if blobs.gotUsername != "account-name" {
+		t.Errorf("expected Git username to reach blob fetcher, got %q", blobs.gotUsername)
+	}
 }
 
 func defaultInfo() ProjectInfo {

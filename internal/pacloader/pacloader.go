@@ -72,21 +72,21 @@ type ProjectLookup interface {
 
 // TokenRevealer 解密并返回凭据明文(由 vault.Vault.Reveal 适配)。
 // 取不到时返回错误,装饰器据此回退(空 token 也可继续尝试公开仓库)。
-type TokenRevealer interface {
-	Reveal(credentialID string) (string, error)
+type GitAuthRevealer interface {
+	GetGitAuth(credentialID string) (username, token string, err error)
 }
 
 // BlobFetcher 按 ref 读仓库单文件内容(由 httpapi.SourceReader 适配)。
 // degraded=true 表示克隆失败的降级响应(非「真实空文件」),装饰器据此回退。
 type BlobFetcher interface {
-	FetchBlob(ctx context.Context, repoURL, token, ref, file string) (content string, degraded bool, err error)
+	FetchBlob(ctx context.Context, repoURL, username, token, ref, file string) (content string, degraded bool, err error)
 }
 
 // Loader 是 PAC 运行时覆盖装饰器:实现 dagrun.SpecLoader。
 type Loader struct {
 	inner          SpecLoader
 	projects       ProjectLookup
-	tokens         TokenRevealer
+	tokens         GitAuthRevealer
 	blobs          BlobFetcher
 	globalOverride bool
 }
@@ -95,7 +95,7 @@ type Loader struct {
 // tokens 可为 nil(无保险库时按公开仓库以空 token 尝试)。
 // globalOverride=true 时无视每项目 PacEnabled,对所有项目尝试覆盖(供 PIPEWRIGHT_PAC_RUNTIME=1
 // 全局强开的历史行为兼容);常规路径传 false,由每项目开关(ProjectInfo.PacEnabled)决定。
-func New(inner SpecLoader, projects ProjectLookup, tokens TokenRevealer, blobs BlobFetcher, globalOverride bool) *Loader {
+func New(inner SpecLoader, projects ProjectLookup, tokens GitAuthRevealer, blobs BlobFetcher, globalOverride bool) *Loader {
 	return &Loader{inner: inner, projects: projects, tokens: tokens, blobs: blobs, globalOverride: globalOverride}
 }
 
@@ -132,10 +132,10 @@ func (l *Loader) tryOverride(ctx context.Context, projectID, branch string) (cfg
 	}
 
 	// 取仓库凭据明文(进程内取用即弃;取不到不致命 → 空 token 尝试公开仓库)。
-	token := ""
+	username, token := "", ""
 	if l.tokens != nil && strings.TrimSpace(info.CredentialID) != "" {
-		if t, terr := l.tokens.Reveal(info.CredentialID); terr == nil {
-			token = t
+		if u, t, terr := l.tokens.GetGitAuth(info.CredentialID); terr == nil {
+			username, token = u, t
 		}
 	}
 
@@ -145,7 +145,7 @@ func (l *Loader) tryOverride(ctx context.Context, projectID, branch string) (cfg
 		ref = info.DefaultBranch
 	}
 
-	content, degraded, ferr := l.blobs.FetchBlob(ctx, info.RepoURL, token, ref, DefaultFile)
+	content, degraded, ferr := l.blobs.FetchBlob(ctx, info.RepoURL, username, token, ref, DefaultFile)
 	if ferr != nil {
 		// 文件不存在 / 克隆失败 → 回退(正常路径:多数项目没有 .pipewright.yml)。
 		debugf("项目 %s 未读到 %s(回退库内配置)", projectID, DefaultFile)

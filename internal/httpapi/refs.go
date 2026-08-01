@@ -23,8 +23,8 @@ import (
 
 // RefsLister 抽象「列仓库分支/tag + 某 ref 的最近 commit」能力(*repocache.Cache 即满足)。
 type RefsLister interface {
-	ListRefs(ctx context.Context, repoURL, token string) (*repocache.Refs, error)
-	ListCommits(ctx context.Context, repoURL, token, ref string, limit int) ([]repocache.Commit, error)
+	ListRefs(ctx context.Context, repoURL, username, token string) (*repocache.Refs, error)
+	ListCommits(ctx context.Context, repoURL, username, token, ref string, limit int) ([]repocache.Commit, error)
 }
 
 type refDTO struct {
@@ -58,14 +58,14 @@ func makeListRefsHandler(projects project.Service, v vault.Vault, lister RefsLis
 		}
 
 		// 取仓库凭据(进程内即用即弃);取不到不致命 → 空 token(公开仓库可成,私有走拉取失败)。
-		token := ""
+		username, token := "", ""
 		if v != nil && strings.TrimSpace(proj.CredentialID) != "" {
-			if t, terr := v.Get(proj.CredentialID); terr == nil {
-				token = t
+			if auth, terr := v.GetGitAuth(proj.CredentialID); terr == nil {
+				username, token = auth.Username, auth.Token
 			}
 		}
 
-		refs, lerr := lister.ListRefs(r.Context(), proj.RepoURL, token)
+		refs, lerr := lister.ListRefs(r.Context(), proj.RepoURL, username, token)
 		token = "" //nolint:ineffassign // 尽早清明文引用
 		_ = token
 		if lerr != nil {
@@ -122,13 +122,13 @@ func makeListCommitsHandler(projects project.Service, v vault.Vault, lister Refs
 			}
 		}
 
-		token := ""
+		username, token := "", ""
 		if v != nil && strings.TrimSpace(proj.CredentialID) != "" {
-			if t, terr := v.Get(proj.CredentialID); terr == nil {
-				token = t
+			if auth, terr := v.GetGitAuth(proj.CredentialID); terr == nil {
+				username, token = auth.Username, auth.Token
 			}
 		}
-		commits, lerr := lister.ListCommits(r.Context(), proj.RepoURL, token, ref, limit)
+		commits, lerr := lister.ListCommits(r.Context(), proj.RepoURL, username, token, ref, limit)
 		token = ""
 		_ = token
 		if lerr != nil {

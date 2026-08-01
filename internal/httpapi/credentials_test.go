@@ -58,7 +58,7 @@ func doJSON(t *testing.T, client *http.Client, method, url, csrf, body string) *
 func TestCreateAndListCredential(t *testing.T) {
 	srv, client, csrf := setupVaultServer(t)
 
-	body := `{"name":"ci deploy","type":"ssh_key","scope":"prod","secret":"` +
+	body := `{"name":"ci deploy","type":"ssh_key","scope":"prod","username":"deploy-user","secret":"` +
 		strings.ReplaceAll(testPEM, "\n", "\\n") + `"}`
 	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/credentials", csrf, body)
 	defer resp.Body.Close()
@@ -76,6 +76,9 @@ func TestCreateAndListCredential(t *testing.T) {
 	}
 	if _, ok := created["secret"]; ok {
 		t.Fatalf("response must not echo secret: %s", raw)
+	}
+	if created["username"] != "deploy-user" {
+		t.Fatalf("username missing from response: %s", raw)
 	}
 	if created["lastUsedAt"] != nil {
 		t.Fatalf("new credential lastUsedAt should be null: %v", created["lastUsedAt"])
@@ -145,7 +148,7 @@ func TestCredentialsRequireAuth(t *testing.T) {
 func TestPatchAndDelete(t *testing.T) {
 	srv, client, csrf := setupVaultServer(t)
 	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/credentials", csrf,
-		`{"name":"tok","type":"git_token","scope":"s","secret":"ghp_abcd1234"}`)
+		`{"name":"tok","type":"git_token","scope":"s","username":"old-user","secret":"ghp_abcd1234"}`)
 	raw, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	var created map[string]any
@@ -156,7 +159,7 @@ func TestPatchAndDelete(t *testing.T) {
 	}
 
 	patchResp := doJSON(t, client, http.MethodPatch, srv.URL+"/api/credentials/"+id, csrf,
-		`{"name":"renamed"}`)
+		`{"name":"renamed","username":"new-user"}`)
 	defer patchResp.Body.Close()
 	if patchResp.StatusCode != http.StatusOK {
 		t.Fatalf("patch status = %d, want 200", patchResp.StatusCode)
@@ -166,6 +169,9 @@ func TestPatchAndDelete(t *testing.T) {
 	_ = json.Unmarshal(patchRaw, &patched)
 	if patched["name"] != "renamed" {
 		t.Fatalf("name not updated: %s", patchRaw)
+	}
+	if patched["username"] != "new-user" {
+		t.Fatalf("username not updated: %s", patchRaw)
 	}
 
 	delResp := doJSON(t, client, http.MethodDelete, srv.URL+"/api/credentials/"+id, csrf, "")
