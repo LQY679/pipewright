@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -174,15 +175,41 @@ func (s *Store) schemaMigrationsDDL() string {
 //
 // SQLite:DDL 与版本记录在同一事务内原子提交,崩溃/部分失败整体回滚,不留半迁移。
 // MySQL :DDL 隐式提交,事务对 DDL 无回滚效力——故逐句执行(go-sql-driver 默认不允许
-// 单 Exec 多语句)后再记录版本;幂等靠 CREATE TABLE/TRIGGER IF NOT EXISTS。
-// 注意:MySQL 的 CREATE INDEX / ALTER ADD COLUMN 无 IF NOT EXISTS,真正的"只应用一次"
-// 由 schema_migrations 跟踪保证;仅当崩溃恰好发生在 DDL 已提交但版本未记录之间,重跑才会
-// 撞已存在对象(单管理员全新建库场景概率极低,可接受)。
+// 单 Exec 多语句)后再记录版本。CREATE TABLE/TRIGGER 靠 IF NOT EXISTS 幂等;
+// ALTER ADD COLUMN 无 IF NOT EXISTS,故对 ADD COLUMN 在跑前查 INFORMATION_SCHEMA
+// 守卫(列已存在则跳过),避免重跑撞 "Duplicate column name" 直接退出、引发重启循环
+// (见迁移 0049 在 DDL 已提交/版本未记录间崩溃的案例)。
 func (s *Store) applyMigration(version, sqlText string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	if s.Dialect == MySQL {
 		for _, stmt := range splitStatements(sqlText) {
+			// MySQL 的 ALTER ... ADD COLUMN 无 IF NOT EXISTS。DDL 隐式提交,
+			// 若进程恰好在 DDL 已提交、版本未记录之间崩溃,重启重跑会撞
+			// "Duplicate column name" 并直接退出(见 0049 案例,导致 systemd 重启循环)。
+			// 故对 ADD COLUMN 做幂等守卫:列已存在则跳过,不让重跑致命。
+			// MySQL 的 ALTER ADD COLUMN / CREATE INDEX 均无 IF NOT EXISTS。DDL 隐式提交,
+			// 若进程恰好在 DDL 已提交、版本未记录之间崩溃,重启重跑会撞 "Duplicate column
+			// name" / "Duplicate key name" 并直接退出(见 0049 案例,导致 systemd 重启循环)。
+			// 故对这两类语句做幂等守卫:对象已存在则跳过,不让重跑致命。
+			if table, col, ok := parseAddColumn(stmt); ok {
+				exists, err := columnExists(s.DB, table, col)
+				if err != nil {
+					return fmt.Errorf("apply migration %s: %w", version, err)
+				}
+				if exists {
+					continue
+				}
+			}
+			if table, idx, ok := parseCreateIndex(stmt); ok {
+				exists, err := indexExists(s.DB, table, idx)
+				if err != nil {
+					return fmt.Errorf("apply migration %s: %w", version, err)
+				}
+				if exists {
+					continue
+				}
+			}
 			if _, err := s.DB.Exec(stmt); err != nil {
 				return fmt.Errorf("apply migration %s: %w", version, err)
 			}
@@ -213,6 +240,58 @@ func (s *Store) applyMigration(version, sqlText string) error {
 		return fmt.Errorf("commit migration %s: %w", version, err)
 	}
 	return nil
+}
+
+// parseAddColumn 从 "ALTER TABLE <t> ADD COLUMN <c> ..." 解析表名与列名
+// (大小写、额外空格、反引号均容错)。匹配返回 ok=true,供 applyMigration 做幂等守卫。
+func parseAddColumn(stmt string) (table, column string, ok bool) {
+	s := strings.TrimSpace(stmt)
+	re := `(?i)^ALTER\s+TABLE\s+` + "`?" + `(\w+)` + "`?" + `\s+ADD\s+COLUMN\s+` + "`?" + `(\w+)` + "`?"
+	m := regexp.MustCompile(re).FindStringSubmatch(s)
+	if len(m) < 3 {
+		return "", "", false
+	}
+	return m[1], m[2], true
+}
+
+// columnExists 查询 INFORMATION_SCHEMA 判断 MySQL 中某表某列是否已存在。
+func columnExists(db *sql.DB, table, column string) (bool, error) {
+	var cnt int
+	err := db.QueryRow(
+		`SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+		 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+		table, column,
+	).Scan(&cnt)
+	if err != nil {
+		return false, err
+	}
+	return cnt > 0, nil
+}
+
+// parseCreateIndex 从 "CREATE [UNIQUE] INDEX <idx> ON <t> (...)" 解析索引名与表名
+// (大小写、反引号均容错)。匹配返回 ok=true,供 applyMigration 做幂等守卫。
+func parseCreateIndex(stmt string) (table, index string, ok bool) {
+	s := strings.TrimSpace(stmt)
+	re := `(?i)^CREATE\s+(UNIQUE\s+)?INDEX\s+` + "`?" + `(\w+)` + "`?" + `\s+ON\s+` + "`?" + `(\w+)` + "`?"
+	m := regexp.MustCompile(re).FindStringSubmatch(s)
+	if len(m) < 4 {
+		return "", "", false
+	}
+	return m[3], m[2], true
+}
+
+// indexExists 查询 INFORMATION_SCHEMA.STATISTICS 判断 MySQL 中某表某索引是否已存在。
+func indexExists(db *sql.DB, table, index string) (bool, error) {
+	var cnt int
+	err := db.QueryRow(
+		`SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+		 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?`,
+		table, index,
+	).Scan(&cnt)
+	if err != nil {
+		return false, err
+	}
+	return cnt > 0, nil
 }
 
 // splitStatements 把含多条 SQL 的迁移文本拆成单条语句(供 MySQL 逐条执行)。
