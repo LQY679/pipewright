@@ -95,8 +95,9 @@ func (b *Builder) runStageRemote(ctx context.Context, r *run.Run, stage pipeline
 		return ErrBuildFailed
 	}
 	if resolved != nil && resolved.CommitShort != "" && b.recordCommit != nil {
-		b.recordCommit(ctx, r.ID, resolved.CommitShort)
+		b.recordCommit(ctx, r.ID, commitMetaOf(resolved))
 	}
+	_ = rep.Log(ctx, streamStdout, commitMetaLogLine(proj.RepoURL, resolved.CommitShort, resolved))
 
 	// 2) 打包工作区 → 经 SSH 传到远程并解包。
 	remoteWS := "/tmp/pipewright-remote/" + sanitizeRemoteSeg(r.ID) + "-" + sanitizeRemoteSeg(stage.ID)

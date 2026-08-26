@@ -216,12 +216,22 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 		needsBuild := len(scriptJobs) > 0 || len(buildImageJobs) > 0
 		// 没有任何可执行节点(script/build_image/deploy_ssh/notify)且无 post → 诚实占位放行。
 		if !needsBuild && len(deployJobs) == 0 && len(notifyJobs) == 0 && len(stage.Post) == 0 {
+			// 纯 git_source 阶段不触发构建克隆,「提交:构建阶段克隆时解析 HEAD」永远无法兑现;
+			// 这里对首个 git_source 节点 best-effort 浅克隆一次解析 HEAD,把提交作者/时间/备注
+			// 打进该节点日志(与构建阶段克隆同一仓库/分支;失败仅记日志,绝不阻断阶段放行)。
+			// 其余 git_source 节点复用同一结果,避免多次克隆。
+			var commitResolved *CloneResolved
 			for _, jb := range stage.Jobs {
 				_ = rep.JobRunning(ctx, jb.ID)
 				jr := rep.JobReporter(jb.ID)
 				if strings.TrimSpace(jb.Type) == "git_source" {
 					for _, line := range gitSourceLogLines(jb, r) {
 						_ = jr.Log(ctx, streamStdout, line)
+					}
+					if commitResolved == nil {
+						commitResolved = b.resolveCommitMetaBestEffort(ctx, jr, r)
+					} else if repo := cfgString(jb.Config, "repoUrl"); repo != "" {
+						_ = jr.Log(ctx, streamStdout, commitMetaLogLine(repo, commitResolved.CommitShort, commitResolved))
 					}
 				} else {
 					_ = jr.Log(ctx, streamStdout, fmt.Sprintf("· %s(%s)— 真实执行未接入;本阶段放行", jb.Name, jb.Type))
@@ -286,9 +296,10 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 			stageResolved = resolved
 			if resolved != nil && resolved.CommitShort != "" {
 				if b.recordCommit != nil {
-					b.recordCommit(ctx, r.ID, resolved.CommitShort)
+					b.recordCommit(ctx, r.ID, commitMetaOf(resolved))
 				}
 			}
+			_ = rep.Log(ctx, streamStdout, commitMetaLogLine(proj.RepoURL, resolved.CommitShort, resolved))
 			// 跨阶段产物传递:把上游阶段已归档的 jar/dist 真字节恢复回本阶段新工作区的原相对路径,
 			// 使「构建/打包/部署」拆成独立串行阶段时,下游(如 build_image)仍能拿到上游产物。
 			// best-effort(首阶段无上游产物即 no-op;失败仅记日志,不阻断)。
@@ -586,8 +597,9 @@ func (b *Builder) cloneJobWorkspace(ctx context.Context, r *run.Run, proj *proje
 		return "", nil, func() {}, ErrBuildFailed
 	}
 	if resolved != nil && resolved.CommitShort != "" && b.recordCommit != nil {
-		b.recordCommit(ctx, r.ID, resolved.CommitShort) // 同一 commit;并发重复记录幂等无害
+		b.recordCommit(ctx, r.ID, commitMetaOf(resolved)) // 同一 commit;并发重复记录幂等无害
 	}
+	_ = rep.Log(ctx, streamStdout, commitMetaLogLine(proj.RepoURL, resolved.CommitShort, resolved))
 	// 跨阶段 + 阶段内上游 job 产物:把本 run 已归档的 jar/dist 真字节恢复进本 job 工作区原相对路径。
 	b.restorePriorArtifacts(ctx, r, ws, rep)
 	return ws, resolved, cleanup, nil
@@ -770,12 +782,16 @@ func (b *Builder) runNotifyJob(ctx context.Context, rep dagrun.StageReporter, jb
 			RunID:   r.ID,
 		}
 		// 提交元数据(best-effort):notify 节点不一定克隆过工作区(resolved 可能为 nil),
-		// 此时对应占位 {{commitAuthor}}/{{commitMessage}}/{{commitTime}} 渲染为空串(向后兼容)。
+		// 此时若模板引用了提交占位,则按 run 触发参数尽力浅克隆一次解析出元数据;
+		// 解析失败仍渲染空串(向后兼容,绝不阻断通知)。
+		if resolved == nil && notifyTemplateUsesCommitMeta(titleTpl, bodyTpl) {
+			resolved = b.resolveCommitMetaBestEffort(ctx, rep, r)
+		}
 		if resolved != nil {
 			vars.CommitAuthor = resolved.Author
 			vars.CommitMessage = resolved.Message
 			if !resolved.Time.IsZero() {
-				vars.CommitTime = resolved.Time.Format(time.RFC3339)
+				vars.CommitTime = resolved.Time.Local().Format("2006-01-02 15:04:05")
 			}
 		}
 		if titleTpl != "" {
@@ -790,6 +806,83 @@ func (b *Builder) runNotifyJob(ctx context.Context, rep dagrun.StageReporter, jb
 		return
 	}
 	_ = rep.Log(ctx, streamStdout, "· 已发通知 → 渠道「"+chName+"」")
+}
+
+// notifyTemplateUsesCommitMeta 报告通知模板是否引用了提交元数据占位
+// ({{commitAuthor}}/{{commitMessage}}/{{commitTime}},大小写不敏感),
+// 用于判断 notify 节点是否需要额外解析一次提交元数据,避免无谓克隆。
+func notifyTemplateUsesCommitMeta(titleTpl, bodyTpl string) bool {
+	for _, ph := range []string{"commitAuthor", "commitMessage", "commitTime"} {
+		if hasPlaceholder(titleTpl, ph) || hasPlaceholder(bodyTpl, ph) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasPlaceholder 报告文本里是否出现 {{name}}(大小写不敏感)占位。
+func hasPlaceholder(text, name string) bool {
+	return strings.Contains(strings.ToLower(text), "{{"+strings.ToLower(name)+"}}")
+}
+
+// resolveCommitMetaBestEffort 在 notify 等未克隆工作区的节点上,按 run 触发参数尽力浅克隆一次
+// 源码并解析出检出 commit 的元数据(作者/时间/备注);失败返回 nil(best-effort,绝不阻断通知)。
+// 临时工作区用完即删,凭据对象用后即清零。
+func (b *Builder) resolveCommitMetaBestEffort(ctx context.Context, rep dagrun.StageReporter, r *run.Run) *CloneResolved {
+	proj, _, perr := b.resolve(ctx, r)
+	if perr != nil {
+		_ = rep.Log(ctx, streamStderr, "解析提交元数据失败(项目配置不可用): "+perr.Error())
+		return nil
+	}
+	ws, mkErr := mkTempWorkspace()
+	if mkErr != nil {
+		_ = rep.Log(ctx, streamStderr, "创建临时工作区失败(解析提交元数据):"+mkErr.Error())
+		return nil
+	}
+	defer func() { _ = os.RemoveAll(ws) }()
+
+	auth := b.resolveCloneAuth(ctx, r, proj)
+	resolved, cerr := b.cloner.Clone(ctx, proj.RepoURL, auth.Username, auth.Token, r.Trigger.Branch, r.Trigger.Commit, ws)
+	auth = vault.GitAuth{}
+	if cerr != nil {
+		if !errors.Is(ctx.Err(), context.Canceled) {
+			_ = rep.Log(ctx, streamStderr, "解析提交元数据失败(best-effort): "+cerr.Error())
+		}
+		return nil
+	}
+	if resolved != nil && resolved.CommitShort != "" && b.recordCommit != nil {
+		b.recordCommit(ctx, r.ID, commitMetaOf(resolved))
+	}
+	_ = rep.Log(ctx, streamStdout, commitMetaLogLine(proj.RepoURL, resolved.CommitShort, resolved))
+	return resolved
+}
+
+// commitMetaLogLine 拼出「已拉取源码」日志行:仓库 @ commit(短 sha),并附提交作者/时间/备注
+// (resolved 为 nil 或字段为空时对应段省略;绝不回显任何凭据)。供各克隆路径(阶段级 / job 级 /
+// 远程 / 旧单构建 / 通知元数据解析)复用,保证「拉取代码时日志里能看到提交元数据」。
+func commitMetaLogLine(repoURL, commitTag string, resolved *CloneResolved) string {
+	tag := commitTag
+	if tag == "" {
+		tag = "latest"
+	}
+	line := fmt.Sprintf("已拉取源码 %s @ %s", repoURL, tag)
+	if resolved == nil {
+		return line
+	}
+	parts := make([]string, 0, 3)
+	if resolved.Author != "" {
+		parts = append(parts, "作者 "+resolved.Author)
+	}
+	if !resolved.Time.IsZero() {
+		parts = append(parts, "提交时间 "+resolved.Time.Local().Format("2006-01-02 15:04:05"))
+	}
+	if resolved.Message != "" {
+		parts = append(parts, "提交备注 "+resolved.Message)
+	}
+	if len(parts) > 0 {
+		line += " [" + strings.Join(parts, " · ") + "]"
+	}
+	return line
 }
 
 // resolveChannel 把节点配的「渠道 id 或名称」解析为 (id, name);找不到返回空。

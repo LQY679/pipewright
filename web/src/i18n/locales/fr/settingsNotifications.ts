@@ -189,6 +189,7 @@ export default {
   placeholderVar: 'variable',
   addTemplate: 'Ajouter un modèle',
   availableVars: 'Variables disponibles',
+  commitVarsHint: 'Espaces réservés du commit (lorsque le HEAD du dépôt peut être résolu) : {{commitAuthor}} auteur · {{commitMessage}} message · {{commitTime}} date du commit (ex. 2026-08-26 15:32:02)',
 
   tplEvent: 'Événement',
   tplChannel: 'Canal (facultatif)',

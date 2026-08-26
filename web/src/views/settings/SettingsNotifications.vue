@@ -1604,6 +1604,11 @@ function configSummary(ch: NotificationChannel): string {
         <code v-for="v in availableVariables" :key="v" class="tpl-var mono">{{ placeholderToken(v) }}</code>
       </div>
 
+      <!-- commit metadata placeholders hint ({{x}} kept out of the literal template) -->
+      <div class="tpl-vars tpl-vars--hint" role="note">
+        <span class="tpl-vars-label">{{ t('settingsNotifications.commitVarsHint') }}</span>
+      </div>
+
       <!-- templates load error -->
       <div v-if="templatesLoadState === 'error'" class="banner banner--error" role="alert">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -2512,6 +2517,19 @@ function configSummary(ch: NotificationChannel): string {
   background: var(--color-inset);
   border: 1px dashed var(--color-border);
   border-radius: var(--rounded);
+}
+
+/* 提交信息占位说明:弱化展示,不占独立边框 */
+.tpl-vars--hint {
+  background: transparent;
+  border: none;
+  padding: 0 2px;
+  margin-top: -6px;
+}
+.tpl-vars--hint .tpl-vars-label {
+  font-weight: 400;
+  line-height: 1.6;
+  white-space: normal;
 }
 
 .tpl-vars-label {

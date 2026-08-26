@@ -189,6 +189,7 @@ export default {
   placeholderVar: 'Variable',
   addTemplate: 'Vorlage hinzufügen',
   availableVars: 'Verfügbare Variablen',
+  commitVarsHint: 'Commit-Platzhalter (wenn das Repository-HEAD aufgelöst werden kann): {{commitAuthor}} Autor · {{commitMessage}} Nachricht · {{commitTime}} Zeitpunkt (z. B. 2026-08-26 15:32:02)',
 
   tplEvent: 'Ereignis',
   tplChannel: 'Kanal (optional)',

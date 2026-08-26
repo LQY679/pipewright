@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/huangchengsir/pipewright/internal/artifactstore"
 	"github.com/huangchengsir/pipewright/internal/deploy"
@@ -54,9 +55,10 @@ type Builder struct {
 	artStore *artifactstore.Store
 	// disableImageGC 关闭「构建后清悬空镜像」(Story 8-17);默认开(false)。由 main 经 env 设置。
 	disableImageGC bool
-	// recordCommit 在克隆解析出实际 commit 后回写到 run(触发未指定 commit 时补真实值)。
-	// nil 则不回写(向后兼容)。由 main 注入(WithCommitRecorder),解耦 build 对 run.Service 的直依赖。
-	recordCommit func(ctx context.Context, runID, commit string)
+	// recordCommit 在克隆解析出实际 commit 后把提交元数据(短 SHA/作者/备注/时间)回写到 run。
+	// 供运行详情与「通知」设置里的全局通知模板取用。nil 则不回写(向后兼容)。
+	// 由 main 注入(WithCommitRecorder),解耦 build 对 run.Service 的直依赖。
+	recordCommit func(ctx context.Context, runID string, meta run.CommitMeta)
 	// deployer/notifier:dag 里 deploy_ssh / notify 节点真实化所需(main 注入 deploy.Service / notify.Service)。
 	// nil → 该类节点退化为占位日志(向后兼容;非-dag Builder.Run 路径不用)。
 	deployer deploy.Service
@@ -124,10 +126,24 @@ func WithImageGC(enabled bool) BuilderOption {
 	return func(b *Builder) { b.disableImageGC = !enabled }
 }
 
-// WithCommitRecorder 注入「回写实际检出 commit 到 run」的回调(由 main 接 run.Service.SetCommit)。
-// 克隆解析出 commit 后调用,补全运行详情里的 COMMIT 字段(触发未指定 commit 时尤其有用)。
-func WithCommitRecorder(fn func(ctx context.Context, runID, commit string)) BuilderOption {
+// WithCommitRecorder 注入「回写实际检出提交元数据到 run」的回调(由 main 接 run.Service.SetCommitMeta)。
+// 克隆解析出 commit 后调用,补全运行详情与全局通知模板的 COMMIT/AUTHOR/MESSAGE/TIME 字段
+// (触发未指定 commit 时尤其有用)。
+func WithCommitRecorder(fn func(ctx context.Context, runID string, meta run.CommitMeta)) BuilderOption {
 	return func(b *Builder) { b.recordCommit = fn }
+}
+
+// commitMetaOf 把克隆解析结果收敛为 run.CommitMeta(供 recordCommit 回写持久化)。
+// Time 存 RFC3339(UTC),零值留空;与 run 迁移列约定一致(全局通知模板经它取到提交作者/备注/时间)。
+func commitMetaOf(resolved *CloneResolved) run.CommitMeta {
+	if resolved == nil {
+		return run.CommitMeta{}
+	}
+	m := run.CommitMeta{Commit: resolved.CommitShort, Author: resolved.Author, Message: resolved.Message}
+	if !resolved.Time.IsZero() {
+		m.Time = resolved.Time.UTC().Format(time.RFC3339)
+	}
+	return m
 }
 
 // WithArtifactLister 注入「列出 run 产物」回调(跨阶段产物传递用):下游阶段据此把上游已归档的
@@ -259,13 +275,13 @@ func (b *Builder) Run(ctx context.Context, r *run.Run, sink run.StepSink) error 
 		return b.failStep(ctx, sink, 0, "源码克隆失败:"+cerr.Error())
 	}
 	if resolved != nil && resolved.CommitShort != "" && b.recordCommit != nil {
-		b.recordCommit(ctx, r.ID, resolved.CommitShort)
+		b.recordCommit(ctx, r.ID, commitMetaOf(resolved))
 	}
 	commitTag := resolved.CommitShort
 	if commitTag == "" {
 		commitTag = "latest"
 	}
-	_ = sink.Log(ctx, streamStdout, 0, "已克隆 "+proj.RepoURL+" @ "+commitTag)
+	_ = sink.Log(ctx, streamStdout, 0, commitMetaLogLine(proj.RepoURL, commitTag, resolved))
 	if err := sink.StepDone(ctx, 0, run.StepSuccess); err != nil {
 		return err
 	}

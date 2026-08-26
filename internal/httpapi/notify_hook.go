@@ -41,12 +41,13 @@ func NewNotifyHook(runs run.Service, notifySvc notify.Service, secretSrc *RunSec
 		hookCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 
-		// 取运行元数据构造 TemplateVars(项目名/分支/commit/状态/耗时/runId/errorSummary)。
+		// 取运行元数据构造 TemplateVars(项目名/分支/commit/提交作者备注时间/状态/耗时/runId/errorSummary)。
 		// 取失败仅记日志、用降级 vars(仅含事件/状态/runId)继续:通知 best-effort,不因取数
 		// 失败而完全不发。errorSummary 经 notify.MaskErrorSummary 尽力脱敏(绝无明文 secret)。
 		var (
 			projectID, projectName, branch, commit, errorSummary string
 			durationMs                                           int64
+			commitAuthor, commitMessage, commitTime              string
 		)
 		if r, err := runs.Get(hookCtx, runID); err != nil {
 			log.Printf("[notify] run %s: 取运行元数据失败(用降级 vars):%v", runID, err)
@@ -55,6 +56,11 @@ func NewNotifyHook(runs run.Service, notifySvc notify.Service, secretSrc *RunSec
 			projectName = r.ProjectName
 			branch = r.Trigger.Branch
 			commit = r.Trigger.Commit
+			// 提交元数据:克隆解析后经 SetCommitMeta 持久化到 run;空 = 未解析到(老运行/非 git 源),
+			// 对应模板占位 {{commitAuthor}}/{{commitMessage}}/{{commitTime}} 渲染为空串。
+			commitAuthor = r.Trigger.CommitAuthor
+			commitMessage = r.Trigger.CommitMessage
+			commitTime = formatCommitTime(r.Trigger.CommitTime)
 			durationMs = runDurationMs(r)
 			// errorSummary 出网脱敏(红线修):先用该 run 真实凭据 Masker 替换(项目/registry/secret
 			// 变量的明文),再过 notify 的关键字/形态正则兜底——双层确保通知正文绝无明文凭据。
@@ -62,13 +68,16 @@ func NewNotifyHook(runs run.Service, notifySvc notify.Service, secretSrc *RunSec
 		}
 
 		vars := notify.TemplateVars{
-			Project:      projectName,
-			Branch:       branch,
-			Commit:       notify.ShortCommit(commit),
-			Status:       finalStatus,
-			Event:        event,
-			RunID:        runID,
-			ErrorSummary: errorSummary,
+			Project:       projectName,
+			Branch:        branch,
+			Commit:        notify.ShortCommit(commit),
+			CommitAuthor:  commitAuthor,
+			CommitMessage: commitMessage,
+			CommitTime:    commitTime,
+			Status:        finalStatus,
+			Event:         event,
+			RunID:         runID,
+			ErrorSummary:  errorSummary,
 		}
 		if durationMs > 0 {
 			vars.DurationMs = strconv.FormatInt(durationMs, 10)
@@ -120,6 +129,10 @@ func NewApprovalNotifier(notifySvc notify.Service, signer *approval.Signer, publ
 			if r, err := runs.Get(ctx, runID); err == nil && r != nil {
 				vars.Branch = r.Trigger.Branch
 				vars.Commit = notify.ShortCommit(r.Trigger.Commit)
+				// 审批卡片同样展示提交作者/备注/时间(空 = 未解析到,占位渲染为空)。
+				vars.CommitAuthor = r.Trigger.CommitAuthor
+				vars.CommitMessage = r.Trigger.CommitMessage
+				vars.CommitTime = formatCommitTime(r.Trigger.CommitTime)
 				if len(r.Trigger.Params) > 0 {
 					vars.Params = r.Trigger.Params
 				}
@@ -152,6 +165,19 @@ func eventForStatus(status string) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+// formatCommitTime 把持久化的提交时间(RFC3339,UTC)格式化为本地「2006-01-02 15:04:05」,
+// 与画布 notify 节点内联模板 {{commitTime}} 的展示格式保持一致。空/解析失败 → 空串(占位渲染为空)。
+func formatCommitTime(v string) string {
+	if strings.TrimSpace(v) == "" {
+		return ""
+	}
+	t, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		return ""
+	}
+	return t.Local().Format("2006-01-02 15:04:05")
 }
 
 // runDurationMs 计算运行耗时(毫秒);缺 StartedAt/FinishedAt 时返回 0(payload 据此省略)。

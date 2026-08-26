@@ -189,6 +189,7 @@ export default {
   placeholderVar: 'variable',
   addTemplate: 'Add Template',
   availableVars: 'Available variables',
+  commitVarsHint: 'Commit placeholders (when the repo HEAD can be resolved): {{commitAuthor}} author · {{commitMessage}} commit message · {{commitTime}} commit time (e.g. 2026-08-26 15:32:02)',
 
   tplEvent: 'Event',
   tplChannel: 'Channel (optional)',

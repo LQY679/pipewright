@@ -78,9 +78,11 @@ type Service interface {
 	// run 不存在不报错(返回空切片);由 HTTP 层据 run 存在性决定 404(仿 GetLogs 语义)。
 	ListArtifacts(ctx context.Context, runID string) ([]Artifact, error)
 
-	// SetCommit 回写本次运行实际检出的 commit 短 SHA(克隆解析出后由执行器调用)。
-	// 触发时未指定 commit(手动触发常见)→ 这里补上真实 commit,供运行详情展示。run 不存在 → ErrNotFound。
-	SetCommit(ctx context.Context, id, commit string) error
+	// SetCommitMeta 回写本次运行实际检出 commit 的元数据(克隆解析出后由执行器调用):
+	// 短 SHA + 作者 + 备注 + 时间(RFC3339)。触发时未指定 commit → 这里补上真实 commit;
+	// 供运行详情与「通知」设置里的全局通知模板 {{commitAuthor}}/{{commitMessage}}/{{commitTime}} 取用。
+	// meta 全空 → 不动(保持触发时的值/空);run 不存在 → ErrNotFound。
+	SetCommitMeta(ctx context.Context, id string, meta CommitMeta) error
 
 	// SaveTestReport 持久化一条测试报告汇总(Story 8-6 / FR-8-6)。
 	// 计数 + 可选覆盖率 + 门禁裁决;同 run 多阶段产报告时各存一条(按 stage 区分)。
@@ -240,10 +242,12 @@ func (s *service) Create(ctx context.Context, projectID string, trigger Trigger)
 	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO pipeline_runs
 		   (id, project_id, status, trigger_type, trigger_branch, trigger_commit, trigger_actor,
+		    trigger_commit_author, trigger_commit_message, trigger_commit_time,
 		    resolved_environment, resolved_target_server_ids, params_json,
 		    chain_source_run_id, chain_depth, created_at, started_at, finished_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
 		id, projectID, StatusQueued, tt, trigger.Branch, trigger.Commit, trigger.Actor,
+		trigger.CommitAuthor, trigger.CommitMessage, trigger.CommitTime,
 		trigger.ResolvedEnvironment, string(targetIDsJSON), string(paramsJSON),
 		strings.TrimSpace(trigger.ChainSourceRunID), chainDepth,
 		now.Format(time.RFC3339),
@@ -288,6 +292,7 @@ func (s *service) Get(ctx context.Context, id string) (*Run, error) {
 	err := s.db.QueryRowContext(ctx,
 		`SELECT pr.project_id, COALESCE(p.name, ''), pr.status,
 		        pr.trigger_type, pr.trigger_branch, pr.trigger_commit, pr.trigger_actor,
+		        pr.trigger_commit_author, pr.trigger_commit_message, pr.trigger_commit_time,
 		        pr.created_at, pr.started_at, pr.finished_at,
 		        pr.failure_log, pr.diagnosis_json, pr.params_json,
 		        pr.chain_source_run_id, pr.chain_depth,
@@ -298,6 +303,7 @@ func (s *service) Get(ctx context.Context, id string) (*Run, error) {
 		 WHERE pr.id = ?`, id,
 	).Scan(&r.ProjectID, &r.ProjectName, &r.Status,
 		&r.Trigger.Type, &r.Trigger.Branch, &r.Trigger.Commit, &r.Trigger.Actor,
+		&r.Trigger.CommitAuthor, &r.Trigger.CommitMessage, &r.Trigger.CommitTime,
 		&createdStr, &startedStr, &finishStr,
 		&failureLog, &diagnosisJSON, &paramsJSON,
 		&r.Trigger.ChainSourceRunID, &r.Trigger.ChainDepth,
@@ -545,16 +551,21 @@ func (s *service) LastSuccessfulRun(ctx context.Context, projectID, branch strin
 	return s.Get(ctx, id)
 }
 
-// SetFailureLog 持久化某次运行的失败日志原文(脱敏前)。参数化 SQL;不存在 → ErrNotFound。
-func (s *service) SetCommit(ctx context.Context, id, commit string) error {
-	commit = strings.TrimSpace(commit)
-	if commit == "" {
+// SetCommitMeta 回写本次运行实际检出 commit 的元数据(短 SHA + 作者 + 备注 + 时间 RFC3339)。
+// 参数化 SQL;不存在 → ErrNotFound;meta 全空 → 不动(保持触发时的值/空)。
+func (s *service) SetCommitMeta(ctx context.Context, id string, meta CommitMeta) error {
+	meta.Commit = strings.TrimSpace(meta.Commit)
+	meta.Author = strings.TrimSpace(meta.Author)
+	meta.Message = strings.TrimSpace(meta.Message)
+	meta.Time = strings.TrimSpace(meta.Time)
+	if meta.Commit == "" && meta.Author == "" && meta.Message == "" && meta.Time == "" {
 		return nil // 无解析结果 → 不动(保持触发时的值/空)
 	}
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE pipeline_runs SET trigger_commit = ? WHERE id = ?`, commit, id)
+		`UPDATE pipeline_runs SET trigger_commit = ?, trigger_commit_author = ?, trigger_commit_message = ?, trigger_commit_time = ? WHERE id = ?`,
+		meta.Commit, meta.Author, meta.Message, meta.Time, id)
 	if err != nil {
-		return fmt.Errorf("run: set commit: %w", err)
+		return fmt.Errorf("run: set commit meta: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound

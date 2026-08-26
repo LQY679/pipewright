@@ -104,6 +104,13 @@ type Trigger struct {
 	Commit string
 	Actor  string
 
+	// CommitAuthor / CommitMessage / CommitTime 是实际检出 commit 的元数据(克隆解析后回写;
+	// 空 = 未解析到)。供运行详情与「通知」设置里的全局通知模板
+	// {{commitAuthor}}/{{commitMessage}}/{{commitTime}} 取用。CommitTime 存 RFC3339。
+	CommitAuthor  string
+	CommitMessage string
+	CommitTime    string
+
 	// ResolvedEnvironment 是解析出的目标环境名(手动触发为空)。
 	ResolvedEnvironment string
 	// ResolvedTargetServerIDs 是解析出的目标服务器引用 id 列表(手动触发为空)。
@@ -119,6 +126,15 @@ type Trigger struct {
 	// ChainDepth 是串联深度:根运行=0,每向下游串联一层 +1。由串联钩子据上游 depth+1 填入。
 	// 用于环路安全(钩子拒绝超过上限的串联);持久化到 pipeline_runs.chain_depth,经 Get 回读。
 	ChainDepth int
+}
+
+// CommitMeta 是克隆解析出的实际检出提交元数据,供 SetCommitMeta 一次性回写持久化
+// (作者/备注/时间);Commit 为短 SHA(触发未指定 commit 时补真实值)。
+type CommitMeta struct {
+	Commit  string // 短 SHA
+	Author  string
+	Message string
+	Time    string // RFC3339(空 = 未知)
 }
 
 // Step 是穿珠时间线节点(运行步骤)。

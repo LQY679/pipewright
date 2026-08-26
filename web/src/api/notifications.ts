@@ -184,7 +184,8 @@ export async function deleteRoute(id: string): Promise<void> {
  *
  * Customizes notification title/body per event (optionally per channel). Placeholders
  * use {{name}} plain-text substitution (no RCE). Variable set is frozen:
- * project / branch / commit / status / event / durationMs / runId / errorSummary.
+ * project / branch / commit / commitAuthor / commitMessage / commitTime /
+ * status / event / durationMs / runId / errorSummary.
  * Unknown placeholders render to empty string. An event with no template falls back to
  * the platform default copy (5-2 behaviour unchanged). Match priority: exact channelId >
  * generic (empty channelId) > platform default. projectId is reserved for 5-4.
@@ -195,6 +196,9 @@ export const TEMPLATE_VARIABLES = [
   'project',
   'branch',
   'commit',
+  'commitAuthor',
+  'commitMessage',
+  'commitTime',
   'status',
   'event',
   'durationMs',
