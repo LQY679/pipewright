@@ -1,0 +1,29 @@
+window 打包命令
+
+构建前端 (产物 -> web/dist, 供 go:embed 内嵌)
+cd /d 项目根目录\web
+npm run build
+
+交叉编译为 linux/arm64 (静态链接, 无外部依赖, 产物 -> dist/)
+cd /d 项目根目录
+if not exist dist mkdir dist
+set GOOS=linux
+set GOARCH=arm64
+set CGO_ENABLED=0
+go build -ldflags "-s -w -X github.com/huangchengsir/pipewright/internal/version.Version=f720e11-dirty -X github.com/huangchengsir/pipewright/internal/version.Commit=f720e11 -X github.com/huangchengsir/pipewright/internal/version.Date=2026-08-26T05:30:00Z" -o dist/pipewright-linux-arm64 ./cmd/pipewright
+
+交叉编译为 linux/x86_64 (静态链接, 无外部依赖, 产物 -> dist/)
+cd /d 项目根目录
+if not exist dist mkdir dist
+set GOOS=linux
+set GOARCH=amd64
+set CGO_ENABLED=0
+go build -ldflags "-s -w -X github.com/huangchengsir/pipewright/internal/version.Version=f720e11-dirty -X github.com/huangchengsir/pipewright/internal/version.Commit=f720e11 -X github.com/huangchengsir/pipewright/internal/version.Date=2026-08-26T05:30:00Z" -o dist/pipewright-linux-amd64 ./cmd/pipewright
+
+编译为 windows/x86_64 (产物 -> dist/)
+cd /d 项目根目录
+if not exist dist mkdir dist
+set GOOS=windows
+set GOARCH=amd64
+set CGO_ENABLED=0
+go build -ldflags "-s -w -X github.com/huangchengsir/pipewright/internal/version.Version=f720e11-dirty -X github.com/huangchengsir/pipewright/internal/version.Commit=f720e11 -X github.com/huangchengsir/pipewright/internal/version.Date=2026-08-26T05:30:00Z" -o dist/pipewright-windows-amd64.exe ./cmd/pipewright

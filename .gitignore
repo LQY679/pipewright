@@ -15,7 +15,7 @@
 /web/node_modules/
 # 注:/web/dist 为 go:embed 所需,保留占位 index.html;真实产物(带 hash 的 assets / favicon 等)
 # 由 vite build 生成,不入库(避免每次构建 churn)。仅保留 index.html 占位。
-/web/dist/*
+/web/dist/**
 !/web/dist/index.html
 # Playwright e2e 产物(报告/trace/截图)— 不入库
 /web/test-results/

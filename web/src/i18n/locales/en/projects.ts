@@ -35,8 +35,8 @@ export default {
   // ─── card actions ──────────────────────────────────────────────
   actionRunTitle: 'Trigger run manually · {name}',
   actionRunAria: 'Manually trigger a pipeline run for project {name}',
-  actionRenameTitle: 'Rename {name}',
-  actionRenameAria: 'Rename project {name}',
+  actionEditTitle: 'Edit project {name}',
+  actionEditAria: 'Edit project {name}',
   actionCodeTitle: 'Browse code · {name}',
   actionCodeAria: 'Browse code for project {name}',
   actionPipelineTitle: 'Pipeline configuration · {name}',
@@ -85,9 +85,9 @@ export default {
   creating: 'Creating…',
   createSubmit: 'Create project',
 
-  // ─── rename modal ──────────────────────────────────────────────
-  renameTitle: 'Rename project',
-  renameSub: 'Change the display name of the project',
+  // ─── edit modal ─────────────────────────────────────────────────
+  editTitle: 'Edit project',
+  editSub: 'Update the project name, default branch, and Git credential',
 
   // ─── delete modal ──────────────────────────────────────────────
   deleteDialogAria: 'Confirm project deletion',
@@ -126,8 +126,8 @@ export default {
   createErrStatus: 'Creation failed ({status})',
   createErrRetry: 'Creation failed, please try again later.',
 
-  renameErrStatus: 'Rename failed ({status})',
-  renameErrRetry: 'Rename failed, please try again later.',
+  editErrStatus: 'Save failed ({status})',
+  editErrRetry: 'Save failed, please try again later.',
 
   deleteErrStatus: 'Delete failed ({status})',
   deleteErrRetry: 'Delete failed, please try again later.',

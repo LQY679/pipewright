@@ -35,8 +35,8 @@ export default {
   // ─── card actions ──────────────────────────────────────────────
   actionRunTitle: '수동으로 실행 트리거 · {name}',
   actionRunAria: '프로젝트 {name}의 파이프라인 실행을 수동으로 트리거',
-  actionRenameTitle: '{name} 이름 변경',
-  actionRenameAria: '프로젝트 {name} 이름 변경',
+  actionEditTitle: '{name} 편집',
+  actionEditAria: '프로젝트 {name} 편집',
   actionCodeTitle: '코드 보기 · {name}',
   actionCodeAria: '프로젝트 {name}의 코드 보기',
   actionPipelineTitle: '파이프라인 설정 · {name}',
@@ -85,9 +85,9 @@ export default {
   creating: '생성 중…',
   createSubmit: '프로젝트 생성',
 
-  // ─── rename modal ──────────────────────────────────────────────
-  renameTitle: '프로젝트 이름 변경',
-  renameSub: '프로젝트의 표시 이름을 변경합니다',
+  // ─── edit modal ─────────────────────────────────────────────────
+  editTitle: '프로젝트 편집',
+  editSub: '프로젝트 이름, 기본 분기, Git 자격 증명을 변경합니다',
 
   // ─── delete modal ──────────────────────────────────────────────
   deleteDialogAria: '프로젝트 삭제 확인',
@@ -126,8 +126,8 @@ export default {
   createErrStatus: '생성에 실패했습니다({status})',
   createErrRetry: '생성에 실패했습니다. 잠시 후 다시 시도하세요.',
 
-  renameErrStatus: '이름 변경에 실패했습니다({status})',
-  renameErrRetry: '이름 변경에 실패했습니다. 잠시 후 다시 시도하세요.',
+  editErrStatus: '저장에 실패했습니다({status})',
+  editErrRetry: '저장에 실패했습니다. 잠시 후 다시 시도하세요.',
 
   deleteErrStatus: '삭제에 실패했습니다({status})',
   deleteErrRetry: '삭제에 실패했습니다. 잠시 후 다시 시도하세요.',

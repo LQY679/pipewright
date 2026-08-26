@@ -298,57 +298,68 @@ async function handleCreateSubmit(): Promise<void> {
   }
 }
 
-// ─── rename modal ──────────────────────────────────────────────────────────────
+// ─── edit modal (name / default branch / git credential) ──────────────────────
 
-const renameModalOpen = ref(false)
-const renamingProject = ref<Project | null>(null)
-const renameValue = ref('')
-const renameError = ref('')
-const renameBanner = ref('')
-const renameSubmitting = ref(false)
+const editModalOpen = ref(false)
+const editingProject = ref<Project | null>(null)
+const editForm = ref({ name: '', defaultBranch: '', credentialId: '' })
+const editError = ref('')
+const editBanner = ref('')
+const editSubmitting = ref(false)
 
-function openRenameModal(p: Project): void {
-  renamingProject.value = p
-  renameValue.value = p.name
-  renameError.value = ''
-  renameBanner.value = ''
-  renameModalOpen.value = true
+function openEditModal(p: Project): void {
+  editingProject.value = p
+  editForm.value = {
+    name: p.name,
+    defaultBranch: p.defaultBranch || '',
+    credentialId: p.credentialId,
+  }
+  editError.value = ''
+  editBanner.value = ''
+  editModalOpen.value = true
 }
 
-function closeRenameModal(): void {
-  if (renameSubmitting.value) return
-  renameModalOpen.value = false
-  renamingProject.value = null
+function closeEditModal(): void {
+  if (editSubmitting.value) return
+  editModalOpen.value = false
+  editingProject.value = null
 }
 
-async function handleRenameSubmit(): Promise<void> {
-  if (!renameValue.value.trim()) {
-    renameError.value = t('projects.errNameEmpty')
+async function handleEditSubmit(): Promise<void> {
+  if (!editForm.value.name.trim()) {
+    editError.value = t('projects.errNameEmpty')
     return
   }
-  if (!renamingProject.value) return
-  renameSubmitting.value = true
-  renameBanner.value = ''
+  if (!editingProject.value) return
+  const base = editingProject.value
+  const input: UpdateProjectInput = { name: editForm.value.name.trim() }
+  const branch = editForm.value.defaultBranch.trim()
+  if (branch !== (base.defaultBranch || '')) input.defaultBranch = branch
+  // 仅在切换凭据时才提交 credentialId(避免无谓的 ls-remote 校验);
+  // 后端非空校验保证不允许解绑,下拉必选一项。
+  if (editForm.value.credentialId !== base.credentialId) {
+    input.credentialId = editForm.value.credentialId
+  }
 
-  const input: UpdateProjectInput = { name: renameValue.value.trim() }
-
+  editSubmitting.value = true
+  editBanner.value = ''
   try {
-    const updated = await updateProject(renamingProject.value.id, input)
+    const updated = await updateProject(base.id, input)
     projects.value = projects.value.map((p) => (p.id === updated.id ? updated : p))
-    renameModalOpen.value = false
-    renamingProject.value = null
+    editModalOpen.value = false
+    editingProject.value = null
   } catch (err) {
     if (err instanceof HttpError) {
       if (err.status === 0) {
-        renameBanner.value = t('projects.errNetworkRetry')
+        editBanner.value = t('projects.errNetworkRetry')
       } else {
-        renameBanner.value = err.apiError?.message ?? t('projects.renameErrStatus', { status: err.status })
+        editBanner.value = err.apiError?.message ?? t('projects.editErrStatus', { status: err.status })
       }
     } else {
-      renameBanner.value = t('projects.renameErrRetry')
+      editBanner.value = t('projects.editErrRetry')
     }
   } finally {
-    renameSubmitting.value = false
+    editSubmitting.value = false
   }
 }
 
@@ -794,12 +805,12 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
                 </svg>
               </button>
 
-              <!-- Rename -->
+              <!-- Edit (name / default branch / git credential) -->
               <button
                 class="action-btn"
-                :title="t('projects.actionRenameTitle', { name: project.name })"
-                :aria-label="t('projects.actionRenameAria', { name: project.name })"
-                @click="openRenameModal(project)"
+                :title="t('projects.actionEditTitle', { name: project.name })"
+                :aria-label="t('projects.actionEditAria', { name: project.name })"
+                @click="openEditModal(project)"
               >
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
                   <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
@@ -1228,17 +1239,17 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
   </Teleport>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       Rename modal
+       Edit modal (name / default branch / git credential)
   ════════════════════════════════════════════════════════════════════════ -->
   <Teleport to="body">
     <div
-      v-if="renameModalOpen && renamingProject"
+      v-if="editModalOpen && editingProject"
       class="modal-scrim"
       role="dialog"
-      :aria-label="t('projects.renameTitle')"
+      :aria-label="t('projects.editTitle')"
       aria-modal="true"
-      @keydown.esc="closeRenameModal"
-      @click.self="closeRenameModal"
+      @keydown.esc="closeEditModal"
+      @click.self="closeEditModal"
     >
       <div class="modal modal--sm">
         <div class="modal-head">
@@ -1249,14 +1260,14 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
             </svg>
           </div>
           <div>
-            <h3 class="modal-title">{{ t('projects.renameTitle') }}</h3>
-            <p class="modal-sub">{{ t('projects.renameSub') }}</p>
+            <h3 class="modal-title">{{ t('projects.editTitle') }}</h3>
+            <p class="modal-sub">{{ t('projects.editSub') }}</p>
           </div>
           <button
             class="modal-close"
             :aria-label="t('projects.closeDialog')"
-            :disabled="renameSubmitting"
-            @click="closeRenameModal"
+            :disabled="editSubmitting"
+            @click="closeEditModal"
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M18 6 6 18M6 6l12 12"/>
@@ -1265,53 +1276,110 @@ const STATUS_CONFIG: Record<RunStatus, StatusConfig> = {
         </div>
 
         <div
-          v-if="renameBanner"
+          v-if="editBanner"
           class="banner banner--error modal-banner"
           role="alert"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
             <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
           </svg>
-          {{ renameBanner }}
+          {{ editBanner }}
         </div>
 
         <form
           class="modal-form"
           novalidate
-          @submit.prevent="handleRenameSubmit"
+          @submit.prevent="handleEditSubmit"
         >
           <div class="field">
-            <label class="field-label" for="rename-input">{{ t('projects.fieldName') }}</label>
+            <label class="field-label" for="edit-input">{{ t('projects.fieldName') }}</label>
             <input
-              id="rename-input"
-              v-model="renameValue"
+              id="edit-input"
+              v-model="editForm.name"
               class="field-input"
-              :class="{ 'field-input--error': renameError }"
+              :class="{ 'field-input--error': editError }"
               type="text"
               autocomplete="off"
-              :disabled="renameSubmitting"
-              :aria-invalid="renameError ? 'true' : undefined"
-              :aria-describedby="renameError ? 'rename-err' : undefined"
-              @input="renameError = ''"
+              :disabled="editSubmitting"
+              :aria-invalid="editError ? 'true' : undefined"
+              :aria-describedby="editError ? 'edit-err' : undefined"
+              @input="editError = ''"
             />
-            <span v-if="renameError" id="rename-err" class="field-error" role="alert">{{ renameError }}</span>
+            <span v-if="editError" id="edit-err" class="field-error" role="alert">{{ editError }}</span>
+          </div>
+
+          <!-- Default branch (optional) -->
+          <div class="field">
+            <label class="field-label" for="edit-branch">
+              {{ t('projects.fieldDefaultBranch') }}
+              <span class="field-hint-inline">{{ t('projects.fieldDefaultBranchHint') }}</span>
+            </label>
+            <input
+              id="edit-branch"
+              v-model="editForm.defaultBranch"
+              class="field-input field-input--mono"
+              type="text"
+              placeholder="main"
+              autocomplete="off"
+              :disabled="editSubmitting"
+            />
+          </div>
+
+          <!-- Credential dropdown — git_token only, masked display -->
+          <div class="field">
+            <label class="field-label" for="edit-cred">
+              {{ t('projects.credential') }}
+              <span class="field-hint-inline">{{ t('projects.fieldCredHint') }}</span>
+            </label>
+            <div class="select-wrap">
+              <select
+                id="edit-cred"
+                v-model="editForm.credentialId"
+                class="field-select"
+                :disabled="editSubmitting || credentialsLoading"
+              >
+                <option v-for="cred in gitCredentials" :key="cred.id" :value="cred.id">
+                  {{ credentialLabel(cred) }}
+                </option>
+              </select>
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                class="select-caret"
+                aria-hidden="true"
+              >
+                <path d="m6 9 6 6 6-6"/>
+              </svg>
+            </div>
+            <span
+              v-if="!credentialsLoading && gitCredentials.length === 0"
+              class="field-hint"
+            >
+              {{ t('projects.credEmptyPre') }}
+              <a href="/settings/vault" class="link">{{ t('projects.credVaultLink') }}</a>
+              {{ t('projects.credEmptyPost') }}
+            </span>
           </div>
 
           <div class="modal-footer">
             <button
               type="button"
               class="btn-secondary"
-              :disabled="renameSubmitting"
-              @click="closeRenameModal"
+              :disabled="editSubmitting"
+              @click="closeEditModal"
             >{{ t('projects.cancel') }}</button>
             <button
               type="submit"
               class="btn-primary"
-              :disabled="renameSubmitting"
-              :aria-busy="renameSubmitting"
+              :disabled="editSubmitting"
+              :aria-busy="editSubmitting"
             >
-              <span v-if="renameSubmitting" class="spinner" aria-hidden="true" />
-              {{ renameSubmitting ? t('projects.saving') : t('projects.save') }}
+              <span v-if="editSubmitting" class="spinner" aria-hidden="true" />
+              {{ editSubmitting ? t('projects.saving') : t('projects.save') }}
             </button>
           </div>
         </form>

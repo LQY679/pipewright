@@ -35,8 +35,8 @@ export default {
   // ─── card actions ──────────────────────────────────────────────
   actionRunTitle: 'Déclencher une exécution manuellement · {name}',
   actionRunAria: 'Déclencher manuellement une exécution de pipeline pour le projet {name}',
-  actionRenameTitle: 'Renommer {name}',
-  actionRenameAria: 'Renommer le projet {name}',
+  actionEditTitle: 'Modifier {name}',
+  actionEditAria: 'Modifier le projet {name}',
   actionCodeTitle: 'Parcourir le code · {name}',
   actionCodeAria: 'Parcourir le code du projet {name}',
   actionPipelineTitle: 'Configuration du pipeline · {name}',
@@ -85,9 +85,9 @@ export default {
   creating: 'Création…',
   createSubmit: 'Créer le projet',
 
-  // ─── rename modal ──────────────────────────────────────────────
-  renameTitle: 'Renommer le projet',
-  renameSub: 'Modifier le nom affiché du projet',
+  // ─── edit modal ─────────────────────────────────────────────────
+  editTitle: 'Modifier le projet',
+  editSub: 'Modifier le nom, la branche par défaut et l’identifiant Git du projet',
 
   // ─── delete modal ──────────────────────────────────────────────
   deleteDialogAria: 'Confirmer la suppression du projet',
@@ -126,8 +126,8 @@ export default {
   createErrStatus: 'Échec de la création ({status})',
   createErrRetry: 'Échec de la création, veuillez réessayer plus tard.',
 
-  renameErrStatus: 'Échec du renommage ({status})',
-  renameErrRetry: 'Échec du renommage, veuillez réessayer plus tard.',
+  editErrStatus: 'Échec de l’enregistrement ({status})',
+  editErrRetry: 'Échec de l’enregistrement, veuillez réessayer plus tard.',
 
   deleteErrStatus: 'Échec de la suppression ({status})',
   deleteErrRetry: 'Échec de la suppression, veuillez réessayer plus tard.',

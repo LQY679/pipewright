@@ -35,8 +35,8 @@ export default {
   // ─── card actions ──────────────────────────────────────────────
   actionRunTitle: '手动触发运行 · {name}',
   actionRunAria: '手动触发项目 {name} 的流水线运行',
-  actionRenameTitle: '重命名 {name}',
-  actionRenameAria: '重命名项目 {name}',
+  actionEditTitle: '编辑项目 {name}',
+  actionEditAria: '编辑项目 {name}',
   actionCodeTitle: '代码浏览 · {name}',
   actionCodeAria: '浏览项目 {name} 的代码',
   actionPipelineTitle: '流水线配置 · {name}',
@@ -85,9 +85,9 @@ export default {
   creating: '创建中…',
   createSubmit: '创建项目',
 
-  // ─── rename modal ──────────────────────────────────────────────
-  renameTitle: '重命名项目',
-  renameSub: '修改项目的显示名称',
+  // ─── edit modal ─────────────────────────────────────────────────
+  editTitle: '编辑项目',
+  editSub: '修改项目名称、默认分支与 Git 凭据',
 
   // ─── delete modal ──────────────────────────────────────────────
   deleteDialogAria: '确认删除项目',
@@ -126,8 +126,8 @@ export default {
   createErrStatus: '创建失败({status})',
   createErrRetry: '创建失败,请稍后重试。',
 
-  renameErrStatus: '重命名失败({status})',
-  renameErrRetry: '重命名失败,请稍后重试。',
+  editErrStatus: '保存失败({status})',
+  editErrRetry: '保存失败,请稍后重试。',
 
   deleteErrStatus: '删除失败({status})',
   deleteErrRetry: '删除失败,请稍后重试。',

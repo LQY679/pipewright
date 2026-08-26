@@ -35,8 +35,8 @@ export default {
   // ─── card actions ──────────────────────────────────────────────
   actionRunTitle: '手動で実行をトリガー · {name}',
   actionRunAria: 'プロジェクト {name} のパイプライン実行を手動でトリガー',
-  actionRenameTitle: '{name} の名前を変更',
-  actionRenameAria: 'プロジェクト {name} の名前を変更',
+  actionEditTitle: '{name} を編集',
+  actionEditAria: 'プロジェクト {name} を編集',
   actionCodeTitle: 'コードを閲覧 · {name}',
   actionCodeAria: 'プロジェクト {name} のコードを閲覧',
   actionPipelineTitle: 'パイプライン設定 · {name}',
@@ -85,9 +85,9 @@ export default {
   creating: '作成中…',
   createSubmit: 'プロジェクトを作成',
 
-  // ─── rename modal ──────────────────────────────────────────────
-  renameTitle: 'プロジェクトの名前を変更',
-  renameSub: 'プロジェクトの表示名を変更します',
+  // ─── edit modal ─────────────────────────────────────────────────
+  editTitle: 'プロジェクトを編集',
+  editSub: 'プロジェクト名・デフォルトブランチ・Git 認証情報を変更します',
 
   // ─── delete modal ──────────────────────────────────────────────
   deleteDialogAria: 'プロジェクト削除の確認',
@@ -126,8 +126,8 @@ export default {
   createErrStatus: '作成に失敗しました（{status}）',
   createErrRetry: '作成に失敗しました。しばらくしてから再試行してください。',
 
-  renameErrStatus: '名前の変更に失敗しました（{status}）',
-  renameErrRetry: '名前の変更に失敗しました。しばらくしてから再試行してください。',
+  editErrStatus: '保存に失敗しました（{status}）',
+  editErrRetry: '保存に失敗しました。しばらくしてから再試行してください。',
 
   deleteErrStatus: '削除に失敗しました（{status}）',
   deleteErrRetry: '削除に失敗しました。しばらくしてから再試行してください。',

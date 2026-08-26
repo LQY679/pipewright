@@ -273,7 +273,7 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 			workspace = ws
 			defer func() { _ = os.RemoveAll(workspace) }() // 宿主零污染
 
-			auth := b.revealGitAuth(proj.CredentialID)
+			auth := b.resolveCloneAuth(ctx, r, proj)
 			resolved, cerr := b.cloner.Clone(ctx, proj.RepoURL, auth.Username, auth.Token, r.Trigger.Branch, r.Trigger.Commit, workspace)
 			auth = vault.GitAuth{}
 			if cerr != nil {
@@ -574,7 +574,7 @@ func (b *Builder) cloneJobWorkspace(ctx context.Context, r *run.Run, proj *proje
 	}
 	cleanup := func() { _ = os.RemoveAll(ws) }
 
-	auth := b.revealGitAuth(proj.CredentialID)
+	auth := b.resolveCloneAuth(ctx, r, proj)
 	resolved, cerr := b.cloner.Clone(ctx, proj.RepoURL, auth.Username, auth.Token, r.Trigger.Branch, r.Trigger.Commit, ws)
 	auth = vault.GitAuth{}
 	if cerr != nil {

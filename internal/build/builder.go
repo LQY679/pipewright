@@ -68,6 +68,10 @@ type Builder struct {
 	// artifactLister 列出本 run 已产出的产物(供跨阶段产物传递:下游阶段把上游归档的 jar/dist
 	// 真字节恢复到自身工作区)。nil 则不做跨阶段恢复(向后兼容)。由 main 注入 runSvc.ListArtifacts。
 	artifactLister func(ctx context.Context, runID string) ([]run.Artifact, error)
+	// pipelines 提供库内流水线 spec(pipeline_configs.spec_json)。非 nil 时克隆认证优先取画布
+	// git_source 节点显式绑定的 credentialId(用户在源节点 UI 配置的凭据);节点未配置/读取失败
+	// 回退项目级凭据(旧行为)。由 main 注入 pipelineSvc。
+	pipelines pipeline.Service
 }
 
 // buildCacheStore 抽象「按 key 恢复/保存工作区缓存路径」的能力(便于 fake 单测注入)。
@@ -144,6 +148,17 @@ func WithStageDeployer(d deploy.Service) BuilderOption {
 // WithStageNotifier 注入通知服务,使 dag 里的 notify 节点真实发通知。
 func WithStageNotifier(n notify.Service) BuilderOption {
 	return func(b *Builder) { b.notifier = n }
+}
+
+// WithSpecService 注入流水线配置服务(pipeline.Service)。非 nil 时克隆认证优先取画布
+// git_source 节点配置的 credentialId(用户在源节点 UI 配置的凭据),否则回退项目级凭据。
+// nil 则始终用项目级凭据(向后兼容)。由 main 注入 pipelineSvc。
+func WithSpecService(s pipeline.Service) BuilderOption {
+	return func(b *Builder) {
+		if s != nil {
+			b.pipelines = s
+		}
+	}
 }
 
 // WithBuildCache 注入构建依赖缓存库(build cache · P0):script 类 job 配了 cachePaths 时,
@@ -539,6 +554,28 @@ func (b *Builder) revealGitAuth(credID string) vault.GitAuth {
 		return vault.GitAuth{}
 	}
 	return auth
+}
+
+// resolveCloneAuth 解析本次克隆的 git 认证。凭据优先取画布 git_source 节点显式配置的
+// credentialId(用户在源节点 UI 配置的凭据);节点未配置该字段或 spec 读取失败时,回退项目级
+// 凭据(旧行为,兼容未显式配置的存量流水线)。绝不回显凭据值。
+func (b *Builder) resolveCloneAuth(ctx context.Context, r *run.Run, proj *project.Project) vault.GitAuth {
+	credID := proj.CredentialID
+	if b.pipelines != nil && r != nil {
+		if cfg, err := b.pipelines.Get(ctx, r.ProjectID); err == nil && cfg != nil {
+			for _, st := range cfg.Spec.Stages {
+				for _, jb := range st.Jobs {
+					if strings.TrimSpace(jb.Type) == "git_source" {
+						if id := cfgString(jb.Config, "credentialId"); id != "" {
+							credID = id
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+	return b.revealGitAuth(credID)
 }
 
 // revealRegistryCred 取仓库凭据明文并解析为 user/password。凭据约定以 "user:password" 存储;

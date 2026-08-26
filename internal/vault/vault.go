@@ -352,13 +352,14 @@ func (s *service) Delete(id string) error {
 	if !s.configured() {
 		return ErrVaultUnconfigured
 	}
-	// 在用守卫:被流水线配置 secret 引用的凭据不可删,否则悬挂引用使该项目配置再不可保存。
-	// pipeline_settings 的引用以 JSON 存(无外键),此处显式 LIKE 检查;credentialId 为 UUID,
-	// 无子串歧义。表不存在(迁移未应用)时 QueryRow 报错,跳过此检查、退回普通删除。
+	// 在用守卫:被流水线配置(spec_json/secret/步骤)或画布 stages 引用的凭据不可删,
+	// 否则悬挂引用使该项目配置再不可保存。引用以 JSON 存(无外键),此处显式 LIKE 检查;
+	// credentialId 为 UUID,无子串歧义。表不存在(迁移未应用)时 QueryRow 报错,跳过此检查、退回普通删除。
 	var refCount int
 	if err := s.db.QueryRow(
-		`SELECT COUNT(*) FROM pipeline_settings WHERE build_json LIKE ? OR environments_json LIKE ? OR steps_json LIKE ?`,
-		"%"+id+"%", "%"+id+"%", "%"+id+"%",
+		`SELECT (SELECT COUNT(*) FROM pipeline_settings WHERE build_json LIKE ? OR environments_json LIKE ? OR steps_json LIKE ?)
+		      + (SELECT COUNT(*) FROM pipeline_configs WHERE spec_json LIKE ?)`,
+		"%"+id+"%", "%"+id+"%", "%"+id+"%", "%"+id+"%",
 	).Scan(&refCount); err == nil && refCount > 0 {
 		return ErrCredentialInUse
 	}

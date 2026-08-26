@@ -35,8 +35,8 @@ export default {
   // ─── card actions ──────────────────────────────────────────────
   actionRunTitle: 'Disparar ejecución manualmente · {name}',
   actionRunAria: 'Disparar manualmente una ejecución de pipeline del proyecto {name}',
-  actionRenameTitle: 'Renombrar {name}',
-  actionRenameAria: 'Renombrar el proyecto {name}',
+  actionEditTitle: 'Editar {name}',
+  actionEditAria: 'Editar el proyecto {name}',
   actionCodeTitle: 'Explorar código · {name}',
   actionCodeAria: 'Explorar el código del proyecto {name}',
   actionPipelineTitle: 'Configuración del pipeline · {name}',
@@ -85,9 +85,9 @@ export default {
   creating: 'Creando…',
   createSubmit: 'Crear proyecto',
 
-  // ─── rename modal ──────────────────────────────────────────────
-  renameTitle: 'Renombrar proyecto',
-  renameSub: 'Cambia el nombre visible del proyecto',
+  // ─── edit modal ─────────────────────────────────────────────────
+  editTitle: 'Editar proyecto',
+  editSub: 'Cambia el nombre, la rama predeterminada y la credencial Git del proyecto',
 
   // ─── delete modal ──────────────────────────────────────────────
   deleteDialogAria: 'Confirmar eliminación del proyecto',
@@ -126,8 +126,8 @@ export default {
   createErrStatus: 'La creación falló ({status})',
   createErrRetry: 'La creación falló, inténtalo de nuevo más tarde.',
 
-  renameErrStatus: 'El cambio de nombre falló ({status})',
-  renameErrRetry: 'El cambio de nombre falló, inténtalo de nuevo más tarde.',
+  editErrStatus: 'Error al guardar ({status})',
+  editErrRetry: 'Error al guardar, inténtalo de nuevo más tarde.',
 
   deleteErrStatus: 'La eliminación falló ({status})',
   deleteErrRetry: 'La eliminación falló, inténtalo de nuevo más tarde.',

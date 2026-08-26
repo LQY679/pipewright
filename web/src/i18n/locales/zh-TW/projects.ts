@@ -35,8 +35,8 @@ export default {
   // ─── card actions ──────────────────────────────────────────────
   actionRunTitle: '手動觸發執行 · {name}',
   actionRunAria: '手動觸發專案 {name} 的流水線執行',
-  actionRenameTitle: '重新命名 {name}',
-  actionRenameAria: '重新命名專案 {name}',
+  actionEditTitle: '編輯專案 {name}',
+  actionEditAria: '編輯專案 {name}',
   actionCodeTitle: '程式碼瀏覽 · {name}',
   actionCodeAria: '瀏覽專案 {name} 的程式碼',
   actionPipelineTitle: '流水線設定 · {name}',
@@ -85,9 +85,9 @@ export default {
   creating: '建立中…',
   createSubmit: '建立專案',
 
-  // ─── rename modal ──────────────────────────────────────────────
-  renameTitle: '重新命名專案',
-  renameSub: '修改專案的顯示名稱',
+  // ─── edit modal ─────────────────────────────────────────────────
+  editTitle: '編輯專案',
+  editSub: '修改專案名稱、預設分支與 Git 憑證',
 
   // ─── delete modal ──────────────────────────────────────────────
   deleteDialogAria: '確認刪除專案',
@@ -126,8 +126,8 @@ export default {
   createErrStatus: '建立失敗({status})',
   createErrRetry: '建立失敗,請稍後重試。',
 
-  renameErrStatus: '重新命名失敗({status})',
-  renameErrRetry: '重新命名失敗,請稍後重試。',
+  editErrStatus: '儲存失敗({status})',
+  editErrRetry: '儲存失敗,請稍後重試。',
 
   deleteErrStatus: '刪除失敗({status})',
   deleteErrRetry: '刪除失敗,請稍後重試。',
