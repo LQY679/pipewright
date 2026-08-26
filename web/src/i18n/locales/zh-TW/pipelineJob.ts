@@ -120,10 +120,10 @@ export default {
   fieldChannelHint: '從「通知」設定裡已設定的管道中選擇;沒有就先去設定裡加一個',
   fieldTitleTemplateLabel: '標題範本(可選)',
   fieldTitleTemplatePlaceholder: '部署成功:{\'{{project}}\'}',
-  fieldTitleTemplateHint: '留空用預設文案;支援佔位 {\'{{project}}\'} {\'{{branch}}\'} {\'{{commit}}\'} {\'{{status}}\'} {\'{{runId}}\'}',
+  fieldTitleTemplateHint: '留空用預設文案;支援佔位 {\'{{project}}\'} {\'{{branch}}\'} {\'{{commit}}\'} {\'{{status}}\'} {\'{{runId}}\'} {\'{{commitAuthor}}\'} {\'{{commitMessage}}\'} {\'{{commitTime}}\'} 等',
   fieldBodyTemplateLabel: '內文範本(可選)',
   fieldBodyTemplatePlaceholder: '分支 {\'{{branch}}\'} {\'@\'} {\'{{commit}}\'} 已執行到通知節點。',
-  fieldBodyTemplateHint: '留空用預設文案;同樣支援 {\'{{佔位}}\'},未知佔位算繪為空',
+  fieldBodyTemplateHint: '留空用預設文案;同樣支援標題佔位符,如 {\'{{commitAuthor}}\'} {\'{{commitMessage}}\'},未知佔位算繪為空',
 
   // ─── jobConfigSchema · template nodes ──────────────────────────────────
   typeBuildFrontendLabel: '前端建置',

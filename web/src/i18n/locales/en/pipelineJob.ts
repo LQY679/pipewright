@@ -120,10 +120,10 @@ export default {
   fieldChannelHint: 'Pick a channel already configured under “Notifications” settings; if none, add one in settings first',
   fieldTitleTemplateLabel: 'Title template (optional)',
   fieldTitleTemplatePlaceholder: 'Deploy succeeded: {\'{{project}}\'}',
-  fieldTitleTemplateHint: 'Empty = default copy; supports placeholders {\'{{project}}\'} {\'{{branch}}\'} {\'{{commit}}\'} {\'{{status}}\'} {\'{{runId}}\'}',
+  fieldTitleTemplateHint: 'Empty = default copy; supports placeholders {\'{{project}}\'} {\'{{branch}}\'} {\'{{commit}}\'} {\'{{status}}\'} {\'{{runId}}\'} {\'{{commitAuthor}}\'} {\'{{commitMessage}}\'} {\'{{commitTime}}\'} etc.',
   fieldBodyTemplateLabel: 'Body template (optional)',
   fieldBodyTemplatePlaceholder: 'Branch {\'{{branch}}\'} {\'@\'} {\'{{commit}}\'} has reached the notify node.',
-  fieldBodyTemplateHint: 'Empty = default copy; also supports {\'{{placeholders}}\'}, unknown ones render empty',
+  fieldBodyTemplateHint: 'Empty = default copy; also supports the title placeholders, e.g. {\'{{commitAuthor}}\'} {\'{{commitMessage}}\'}, unknown ones render empty',
 
   // ─── jobConfigSchema · template nodes ──────────────────────────────────
   typeBuildFrontendLabel: 'Frontend build',

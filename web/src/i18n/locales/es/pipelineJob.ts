@@ -120,10 +120,10 @@ export default {
   fieldChannelHint: 'Selecciona un canal ya configurado en los ajustes de «Notificaciones»; si no hay ninguno, añade uno primero en los ajustes',
   fieldTitleTemplateLabel: 'Plantilla de título (opcional)',
   fieldTitleTemplatePlaceholder: 'Despliegue exitoso: {\'{{project}}\'}',
-  fieldTitleTemplateHint: 'Vacío = texto predeterminado; admite los marcadores {\'{{project}}\'} {\'{{branch}}\'} {\'{{commit}}\'} {\'{{status}}\'} {\'{{runId}}\'}',
+  fieldTitleTemplateHint: 'Vacío = texto predeterminado; admite los marcadores {\'{{project}}\'} {\'{{branch}}\'} {\'{{commit}}\'} {\'{{status}}\'} {\'{{runId}}\'} {\'{{commitAuthor}}\'} {\'{{commitMessage}}\'} {\'{{commitTime}}\'} etc.',
   fieldBodyTemplateLabel: 'Plantilla de cuerpo (opcional)',
   fieldBodyTemplatePlaceholder: 'La rama {\'{{branch}}\'} {\'@\'} {\'{{commit}}\'} ha llegado al nodo de notificación.',
-  fieldBodyTemplateHint: 'Vacío = texto predeterminado; también admite {\'{{marcadores}}\'}, los desconocidos se renderizan vacíos',
+  fieldBodyTemplateHint: 'Vacío = texto predeterminado; también admite los marcadores del título, p. ej. {\'{{commitAuthor}}\'} {\'{{commitMessage}}\'}, los desconocidos se renderizan vacíos',
 
   // ─── jobConfigSchema · template nodes ──────────────────────────────────
   typeBuildFrontendLabel: 'Build de frontend',

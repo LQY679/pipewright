@@ -120,10 +120,10 @@ export default {
   fieldChannelHint: '「알림」 설정에서 이미 구성한 채널 중 선택. 없으면 먼저 설정에서 추가',
   fieldTitleTemplateLabel: '제목 템플릿(선택)',
   fieldTitleTemplatePlaceholder: '배포 성공: {\'{{project}}\'}',
-  fieldTitleTemplateHint: '비움 = 기본 문구. 자리표시자 {\'{{project}}\'} {\'{{branch}}\'} {\'{{commit}}\'} {\'{{status}}\'} {\'{{runId}}\'} 지원',
+  fieldTitleTemplateHint: '비움 = 기본 문구. 자리표시자 {\'{{project}}\'} {\'{{branch}}\'} {\'{{commit}}\'} {\'{{status}}\'} {\'{{runId}}\'} {\'{{commitAuthor}}\'} {\'{{commitMessage}}\'} {\'{{commitTime}}\'} 등 지원',
   fieldBodyTemplateLabel: '본문 템플릿(선택)',
   fieldBodyTemplatePlaceholder: '브랜치 {\'{{branch}}\'} {\'@\'} {\'{{commit}}\'} 가 알림 노드까지 실행되었습니다.',
-  fieldBodyTemplateHint: '비움 = 기본 문구. 마찬가지로 {\'{{자리표시자}}\'} 지원, 알 수 없는 것은 빈 값으로 렌더링',
+  fieldBodyTemplateHint: '비움 = 기본 문구. 마찬가지로 제목 자리표시자 지원, 예: {\'{{commitAuthor}}\'} {\'{{commitMessage}}\'}, 알 수 없는 것은 빈 값으로 렌더링',
 
   // ─── jobConfigSchema · template nodes ──────────────────────────────────
   typeBuildFrontendLabel: '프런트엔드 빌드',

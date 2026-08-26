@@ -120,10 +120,10 @@ export default {
   fieldChannelHint: 'Sélectionnez un canal déjà configuré dans les paramètres « Notifications » ; s’il n’y en a aucun, ajoutez-en un d’abord dans les paramètres',
   fieldTitleTemplateLabel: 'Modèle de titre (optionnel)',
   fieldTitleTemplatePlaceholder: 'Déploiement réussi : {\'{{project}}\'}',
-  fieldTitleTemplateHint: 'Vide = texte par défaut ; prend en charge les espaces réservés {\'{{project}}\'} {\'{{branch}}\'} {\'{{commit}}\'} {\'{{status}}\'} {\'{{runId}}\'}',
+  fieldTitleTemplateHint: 'Vide = texte par défaut ; prend en charge les espaces réservés {\'{{project}}\'} {\'{{branch}}\'} {\'{{commit}}\'} {\'{{status}}\'} {\'{{runId}}\'} {\'{{commitAuthor}}\'} {\'{{commitMessage}}\'} {\'{{commitTime}}\'} etc.',
   fieldBodyTemplateLabel: 'Modèle de corps (optionnel)',
   fieldBodyTemplatePlaceholder: 'La branche {\'{{branch}}\'} {\'@\'} {\'{{commit}}\'} a atteint le nœud de notification.',
-  fieldBodyTemplateHint: 'Vide = texte par défaut ; prend aussi en charge {\'{{espaces réservés}}\'}, les inconnus sont rendus vides',
+  fieldBodyTemplateHint: 'Vide = texte par défaut ; prend aussi en charge les espaces réservés du titre, p. ex. {\'{{commitAuthor}}\'} {\'{{commitMessage}}\'}, les inconnus sont rendus vides',
 
   // ─── jobConfigSchema · template nodes ──────────────────────────────────
   typeBuildFrontendLabel: 'Build frontend',

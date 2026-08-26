@@ -120,10 +120,10 @@ export default {
   fieldChannelHint: '「通知」設定で構成済みのチャネルから選択。無ければ先に設定で追加',
   fieldTitleTemplateLabel: 'タイトルテンプレート(任意)',
   fieldTitleTemplatePlaceholder: 'デプロイ成功:{\'{{project}}\'}',
-  fieldTitleTemplateHint: '空 = デフォルト文言。プレースホルダ {\'{{project}}\'} {\'{{branch}}\'} {\'{{commit}}\'} {\'{{status}}\'} {\'{{runId}}\'} に対応',
+  fieldTitleTemplateHint: '空 = デフォルト文言。プレースホルダ {\'{{project}}\'} {\'{{branch}}\'} {\'{{commit}}\'} {\'{{status}}\'} {\'{{runId}}\'} {\'{{commitAuthor}}\'} {\'{{commitMessage}}\'} {\'{{commitTime}}\'} などに対応',
   fieldBodyTemplateLabel: '本文テンプレート(任意)',
   fieldBodyTemplatePlaceholder: 'ブランチ {\'{{branch}}\'} {\'@\'} {\'{{commit}}\'} が通知ノードまで実行されました。',
-  fieldBodyTemplateHint: '空 = デフォルト文言。同様に {\'{{プレースホルダ}}\'} に対応、未知のものは空で描画',
+  fieldBodyTemplateHint: '空 = デフォルト文言。同様にタイトルのプレースホルダに対応、例: {\'{{commitAuthor}}\'} {\'{{commitMessage}}\'},未知のものは空で描画',
 
   // ─── jobConfigSchema · template nodes ──────────────────────────────────
   typeBuildFrontendLabel: 'フロントエンドビルド',

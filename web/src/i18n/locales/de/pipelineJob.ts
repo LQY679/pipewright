@@ -120,10 +120,10 @@ export default {
   fieldChannelHint: 'Wähle einen bereits unter „Benachrichtigungen“ konfigurierten Kanal; falls keiner vorhanden ist, füge zuerst einen in den Einstellungen hinzu',
   fieldTitleTemplateLabel: 'Titelvorlage (optional)',
   fieldTitleTemplatePlaceholder: 'Bereitstellung erfolgreich: {\'{{project}}\'}',
-  fieldTitleTemplateHint: 'Leer = Standardtext; unterstützt Platzhalter {\'{{project}}\'} {\'{{branch}}\'} {\'{{commit}}\'} {\'{{status}}\'} {\'{{runId}}\'}',
+  fieldTitleTemplateHint: 'Leer = Standardtext; unterstützt Platzhalter {\'{{project}}\'} {\'{{branch}}\'} {\'{{commit}}\'} {\'{{status}}\'} {\'{{runId}}\'} {\'{{commitAuthor}}\'} {\'{{commitMessage}}\'} {\'{{commitTime}}\'} usw.',
   fieldBodyTemplateLabel: 'Textvorlage (optional)',
   fieldBodyTemplatePlaceholder: 'Branch {\'{{branch}}\'} {\'@\'} {\'{{commit}}\'} hat den Benachrichtigungsknoten erreicht.',
-  fieldBodyTemplateHint: 'Leer = Standardtext; unterstützt ebenfalls {\'{{Platzhalter}}\'}, unbekannte werden leer gerendert',
+  fieldBodyTemplateHint: 'Leer = Standardtext; unterstützt ebenfalls die Titel-Platzhalter, z. B. {\'{{commitAuthor}}\'} {\'{{commitMessage}}\'}, unbekannte werden leer gerendert',
 
   // ─── jobConfigSchema · template nodes ──────────────────────────────────
   typeBuildFrontendLabel: 'Frontend-Build',
