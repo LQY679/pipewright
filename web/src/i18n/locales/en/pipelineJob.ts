@@ -93,8 +93,9 @@ export default {
   typePushImageDesc: 'Push the image to a container registry',
   fieldRegistryLabel: 'Image registry URL',
   fieldImageNameLabel: 'Image name',
+  fieldImageNameHint: 'Optional. Image name (e.g. org/app). Leave empty to default to the project name',
   fieldTagLabel: 'Tag',
-  fieldTagHint: 'Available variables: {\'${COMMIT_SHA}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
+  fieldTagHint: 'Available variables: {\'${COMMIT_SHA}\'} {\'${COMMIT_AUTHOR}\'} {\'${COMMIT_MESSAGE}\'} {\'${COMMIT_TIME}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
   fieldRegistryCredentialLabel: 'Registry credential',
   fieldRegistryCredentialHint: 'Reference the image registry login credential',
 
@@ -136,7 +137,7 @@ export default {
   fieldParamsLabel: 'Param table',
   fieldParamsHint: 'One key=value per line, fully free-form; reference with {\'{{key}}\'} in the command template / artifact paths',
   fieldCommandTemplateLabel: 'Command template',
-  fieldCommandTemplateHint: 'Multi-line; {\'{{param}}\'} is replaced with the param table value, $ENV is still handled by the in-container shell',
+  fieldCommandTemplateHint: 'Multi-line; {\'{{param}}\'} is replaced with the param table value; also supports {\'{{commit_sha}}\'} {\'{{commit_author}}\'} {\'{{commit_message}}\'} {\'{{commit_time}}\'}, $ENV is still handled by the in-container shell',
   fieldTemplatedArtifactPathHint: 'Optional, one per line, supports {\'{{param}}\'} and globs; directory→dist, *.jar→jar, other→archive',
   fieldTemplatedWorkDirHint: 'Optional, relative to the cloned workspace root',
   fieldTemplatedCachePathsHint:

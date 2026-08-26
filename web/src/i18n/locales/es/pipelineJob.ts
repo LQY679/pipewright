@@ -93,8 +93,9 @@ export default {
   typePushImageDesc: 'Envía la imagen a un registro de contenedores',
   fieldRegistryLabel: 'URL del registro de imágenes',
   fieldImageNameLabel: 'Nombre de la imagen',
+  fieldImageNameHint: 'Opcional. Nombre de la imagen (p. ej. org/app). Vacío = nombre del proyecto',
   fieldTagLabel: 'Etiqueta',
-  fieldTagHint: 'Variables disponibles: {\'${COMMIT_SHA}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
+  fieldTagHint: 'Variables disponibles: {\'${COMMIT_SHA}\'} {\'${COMMIT_AUTHOR}\'} {\'${COMMIT_MESSAGE}\'} {\'${COMMIT_TIME}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
   fieldRegistryCredentialLabel: 'Credencial del registro',
   fieldRegistryCredentialHint: 'Referencia la credencial de login del registro de imágenes',
 
@@ -136,7 +137,7 @@ export default {
   fieldParamsLabel: 'Tabla de parámetros',
   fieldParamsHint: 'Un key=value por línea, totalmente libre; referéncialo con {\'{{key}}\'} en la plantilla de comandos / rutas de artefactos',
   fieldCommandTemplateLabel: 'Plantilla de comandos',
-  fieldCommandTemplateHint: 'Multilínea; {\'{{parámetro}}\'} se reemplaza por el valor de la tabla de parámetros, $ENV lo sigue gestionando el shell del contenedor',
+  fieldCommandTemplateHint: 'Multilínea; {\'{{parámetro}}\'} se reemplaza por el valor de la tabla de parámetros; también admite {\'{{commit_sha}}\'} {\'{{commit_author}}\'} {\'{{commit_message}}\'} {\'{{commit_time}}\'}, $ENV lo sigue gestionando el shell del contenedor',
   fieldTemplatedArtifactPathHint: 'Opcional, uno por línea, admite {\'{{parámetro}}\'} y comodines; directorio→dist, *.jar→jar, otros→archive',
   fieldTemplatedWorkDirHint: 'Opcional, relativo a la raíz del espacio de trabajo clonado',
   fieldTemplatedCachePathsHint:

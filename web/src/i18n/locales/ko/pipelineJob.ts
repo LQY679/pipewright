@@ -93,8 +93,9 @@ export default {
   typePushImageDesc: '이미지를 컨테이너 레지스트리로 푸시',
   fieldRegistryLabel: '이미지 레지스트리 URL',
   fieldImageNameLabel: '이미지 이름',
+  fieldImageNameHint: '선택. 이미지 이름(예: org/app). 비워두면 프로젝트 이름이 기본값',
   fieldTagLabel: '태그',
-  fieldTagHint: '사용 가능한 변수: {\'${COMMIT_SHA}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
+  fieldTagHint: '사용 가능한 변수: {\'${COMMIT_SHA}\'} {\'${COMMIT_AUTHOR}\'} {\'${COMMIT_MESSAGE}\'} {\'${COMMIT_TIME}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
   fieldRegistryCredentialLabel: '레지스트리 자격 증명',
   fieldRegistryCredentialHint: '이미지 레지스트리 로그인 자격 증명 참조',
 
@@ -136,7 +137,7 @@ export default {
   fieldParamsLabel: '매개변수 표',
   fieldParamsHint: '한 줄에 하나의 key=value, 완전 자유. 명령 템플릿/아티팩트 경로에서 {\'{{key}}\'} 로 참조',
   fieldCommandTemplateLabel: '명령 템플릿',
-  fieldCommandTemplateHint: '여러 줄. {\'{{매개변수}}\'} 는 매개변수 표의 값으로 치환, $ENV 는 컨테이너 내 shell 에 위임',
+  fieldCommandTemplateHint: '여러 줄. {\'{{매개변수}}\'} 는 매개변수 표의 값으로 치환; additionally {\'{{commit_sha}}\'} {\'{{commit_author}}\'} {\'{{commit_message}}\'} {\'{{commit_time}}\'} 지원, $ENV 는 컨테이너 내 shell 에 위임',
   fieldTemplatedArtifactPathHint: '선택, 한 줄에 하나, {\'{{매개변수}}\'} 와 와일드카드 지원. 디렉터리→dist, *.jar→jar, 그 외→archive',
   fieldTemplatedWorkDirHint: '선택, 복제한 작업 공간 루트 기준 상대',
   fieldTemplatedCachePathsHint:

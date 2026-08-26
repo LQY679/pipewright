@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/huangchengsir/pipewright/internal/dag"
 	"github.com/huangchengsir/pipewright/internal/dagrun"
@@ -87,6 +88,95 @@ func renderTemplate(tpl string, ctx map[string]string) string {
 	})
 }
 
+// commitMetaAsEnv 把克隆解析出的提交元数据转为明文环境变量(字段空则跳过),供 script/build 步骤
+// 注入隔离容器。命名以 COMMIT_SHA 为基准(全大写下划线),与前端 tag 提示所列 ${COMMIT_SHA} 风格一致。
+// 这些变量为明文 commit 信息(非敏感),Secret=false,不登记 Masker。
+func commitMetaAsEnv(resolved *CloneResolved) []pipeline.BuildVar {
+	if resolved == nil {
+		return nil
+	}
+	var env []pipeline.BuildVar
+	if resolved.CommitShort != "" {
+		env = append(env, pipeline.BuildVar{Key: "COMMIT_SHA", Value: resolved.CommitShort, Secret: false})
+	}
+	if resolved.Author != "" {
+		env = append(env, pipeline.BuildVar{Key: "COMMIT_AUTHOR", Value: resolved.Author, Secret: false})
+	}
+	if resolved.Message != "" {
+		env = append(env, pipeline.BuildVar{Key: "COMMIT_MESSAGE", Value: resolved.Message, Secret: false})
+	}
+	if !resolved.Time.IsZero() {
+		env = append(env, pipeline.BuildVar{Key: "COMMIT_TIME", Value: resolved.Time.Format(time.RFC3339), Secret: false})
+	}
+	return env
+}
+
+// tagPlaceholderRe 匹配 ${KEY} 占位(KEY 为大写字母/数字/下划线),用于镜像 tag 模板渲染。
+var tagPlaceholderRe = regexp.MustCompile(`\$\{([A-Z0-9_]+)\}`)
+
+// expandTagPlaceholders 把镜像 tag 模板里的 ${KEY} 占位符替换为真实值。支持的变量与前端 fieldTagHint
+// 提示一致:${COMMIT_SHA} ${COMMIT_AUTHOR} ${COMMIT_MESSAGE} ${COMMIT_TIME} ${BRANCH} ${BUILD_NUMBER}
+// (其中 BRANCH/BUILD_NUMBER 此前仅前端提示、后端未实现,本次一并补齐)。未识别的占位符或对应值为空时
+// 保留原占位符(避免渲染成空串污染 tag 命名)。无 ${ 则零开销直返。
+func expandTagPlaceholders(tag string, r *run.Run, resolved *CloneResolved) string {
+	if tag == "" || !strings.Contains(tag, "${") {
+		return tag
+	}
+	vars := map[string]string{}
+	if resolved != nil {
+		if resolved.CommitShort != "" {
+			vars["COMMIT_SHA"] = resolved.CommitShort
+		}
+		if resolved.Author != "" {
+			vars["COMMIT_AUTHOR"] = resolved.Author
+		}
+		if resolved.Message != "" {
+			vars["COMMIT_MESSAGE"] = resolved.Message
+		}
+		if !resolved.Time.IsZero() {
+			vars["COMMIT_TIME"] = resolved.Time.Format(time.RFC3339)
+		}
+	}
+	if r != nil {
+		if r.Trigger.Branch != "" {
+			vars["BRANCH"] = r.Trigger.Branch
+		}
+		if r.ID != "" {
+			vars["BUILD_NUMBER"] = r.ID
+		}
+	}
+	return tagPlaceholderRe.ReplaceAllStringFunc(tag, func(m string) string {
+		key := tagPlaceholderRe.FindStringSubmatch(m)[1]
+		if v, ok := vars[key]; ok && v != "" {
+			return v
+		}
+		return m // 保留原占位符
+	})
+}
+
+// composeTemplateContext 在 templateContext(cfg) 基础上追加提交元数据键,供 {{}} 模板渲染。
+// 新增键(小写,与既有 config 字段风格一致):commit_sha / commit_author / commit_message / commit_time。
+// resolved 为 nil 时仅等价于 templateContext(cfg),向后兼容。未知占位原样保留,新增键为空不影响既有渲染。
+func composeTemplateContext(cfg map[string]any, resolved *CloneResolved) map[string]string {
+	ctx := templateContext(cfg)
+	if resolved == nil {
+		return ctx
+	}
+	if resolved.CommitShort != "" {
+		ctx["commit_sha"] = resolved.CommitShort
+	}
+	if resolved.Author != "" {
+		ctx["commit_author"] = resolved.Author
+	}
+	if resolved.Message != "" {
+		ctx["commit_message"] = resolved.Message
+	}
+	if !resolved.Time.IsZero() {
+		ctx["commit_time"] = resolved.Time.Format(time.RFC3339)
+	}
+	return ctx
+}
+
 // isDeployJob 判断是否「SSH 部署」类节点(deploy_ssh 通用 / deploy_frontend 前端部署模板)。
 func isDeployJob(jobType string) bool {
 	t := strings.TrimSpace(jobType)
@@ -160,11 +250,11 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 		//  - DAG 路径:job 各自克隆独立工作区,阶段级工作区仅 post 步骤(在其中跑)才需要。
 		// 纯部署/通知阶段无工作区。proj/settings 在 needsBuild||hasPost 时解析(两路径都可能用到)。
 		var (
-			proj      *project.Project
-			settings  *pipeline.Settings
-			workspace string
-			commitTag = "latest"
-		)
+			proj         *project.Project
+			settings     *pipeline.Settings
+			workspace    string
+			stageResolved *CloneResolved // 阶段级工作区克隆出的 commit 元数据(供 env/占位符/{{}} 上下文)
+			)
 		if needsBuild || hasPost {
 			p, s, perr := b.resolve(ctx, r)
 			if perr != nil {
@@ -190,11 +280,11 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 				if errors.Is(ctx.Err(), context.Canceled) {
 					return run.ErrCanceled
 				}
-				_ = rep.Log(ctx, streamStderr, "源码克隆失败(鉴权/网络/ref 不存在或被 SSRF 拒绝)")
+				_ = rep.Log(ctx, streamStderr, "源码克隆失败(鉴权/网络/ref 不存在或被 SSRF 拒绝): "+cerr.Error())
 				return ErrBuildFailed
 			}
+			stageResolved = resolved
 			if resolved != nil && resolved.CommitShort != "" {
-				commitTag = resolved.CommitShort
 				if b.recordCommit != nil {
 					b.recordCommit(ctx, r.ID, resolved.CommitShort)
 				}
@@ -222,7 +312,7 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 
 			// ── 阶段内 job 级 DAG 路径:按 job 依赖并发调度,无依赖 job 并行、各自独立工作区 ──
 			if hasJobDAG {
-				return b.runStageJobsDAG(ctx, r, stage, rep, sink, proj, settings, svcNetwork, hasPushJob, reportSink)
+				return b.runStageJobsDAG(ctx, r, stage, rep, sink, proj, settings, svcNetwork, hasPushJob, reportSink, stageResolved)
 			}
 
 			// ── 既有路径(零行为变化):类型分组串行,共用单一阶段工作区 ──
@@ -236,7 +326,7 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 					_ = rep.JobRunning(ctx, jb.ID)
 					jrep := rep.JobReporter(jb.ID)
 					jsink := &reporterSink{rep: jrep}
-					step, verr := scriptStepFromJob(jb)
+					step, verr := scriptStepFromJob(jb, stageResolved)
 					if verr != nil {
 						_ = jrep.Log(ctx, streamStderr, fmt.Sprintf("script job「%s」配置无效:%v", jb.Name, verr))
 						_ = rep.JobDone(ctx, jb.ID, run.StepFailed)
@@ -256,12 +346,12 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 					}
 					// 构建依赖缓存(#61):执行前恢复(暖构建)、成功后保存(best-effort,缓存问题绝不让构建失败)。
 					// 任务级 timeout/retry(#63):零值时 runScriptStepWithOpts 退化为单次无超时执行(旧行为)。
-					b.restoreJobCache(ctx, jrep, jb, r.Trigger.Branch, workspace)
+					b.restoreJobCache(ctx, jrep, jb, r.Trigger.Branch, workspace, stageResolved)
 					if err := b.runScriptStepWithOpts(ctx, jsink, 0, step, workspace); err != nil {
 						_ = rep.JobDone(ctx, jb.ID, run.StepFailed)
 						return err // ErrBuildFailed / run.ErrCanceled
 					}
-					b.saveJobCache(ctx, jrep, jb, r.Trigger.Branch, workspace)
+					b.saveJobCache(ctx, jrep, jb, r.Trigger.Branch, workspace, stageResolved)
 					// 捕获本 job 写入 $PIPEWRIGHT_ENV 的变量,供后续同阶段 job 引用。
 					carriedEnv = append(carriedEnv, captureStageEnv(ctx, jrep, workspace)...)
 					_ = rep.JobDone(ctx, jb.ID, run.StepSuccess)
@@ -274,14 +364,14 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 					_ = rep.JobRunning(ctx, jb.ID)
 					jrep := rep.JobReporter(jb.ID)
 					jsink := &reporterSink{rep: jrep}
-					if err := b.runBuildImageJob(ctx, jsink, jrep, jb, stage.Name, proj, settings, r.Trigger.ResolvedEnvironment, workspace, commitTag, hasPushJob); err != nil {
+					if err := b.runBuildImageJob(ctx, jsink, jrep, jb, stage.Name, proj, settings, r.Trigger.ResolvedEnvironment, workspace, r, stageResolved, hasPushJob); err != nil {
 						_ = rep.JobDone(ctx, jb.ID, run.StepFailed)
 						return err
 					}
 					_ = rep.JobDone(ctx, jb.ID, run.StepSuccess)
 				}
 
-				b.collectScriptArtifacts(ctx, scriptJobs, workspace, slugify(proj.Name), stage.Name, rep)
+				b.collectScriptArtifacts(ctx, scriptJobs, workspace, slugify(proj.Name), stage.Name, stageResolved, rep)
 				if err := collectStageReport(ctx, reportSink, r, stage, workspace, rep); err != nil {
 					return err
 				}
@@ -294,7 +384,7 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 				}
 				_ = rep.JobRunning(ctx, jb.ID)
 				jrep := rep.JobReporter(jb.ID)
-				if err := b.runDeployJob(ctx, jrep, jb, r.ID, r.Trigger.Params); err != nil {
+				if err := b.runDeployJob(ctx, jrep, jb, r.ID, r.Trigger.Params, stageResolved); err != nil {
 					_ = rep.JobDone(ctx, jb.ID, run.StepFailed)
 					return err
 				}
@@ -307,7 +397,7 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 					return run.ErrCanceled
 				}
 				_ = rep.JobRunning(ctx, jb.ID)
-				b.runNotifyJob(ctx, rep.JobReporter(jb.ID), jb, r)
+				b.runNotifyJob(ctx, rep.JobReporter(jb.ID), jb, r, stageResolved)
 				_ = rep.JobDone(ctx, jb.ID, run.StepSuccess)
 			}
 
@@ -367,6 +457,7 @@ func (b *Builder) runStageJobsDAG(
 	svcNetwork string,
 	hasPushJob bool,
 	reportSink TestReportSink,
+	stageResolved *CloneResolved,
 ) error {
 	nodes := make([]dag.Node, 0, len(stage.Jobs))
 	jobByID := make(map[string]pipeline.Job, len(stage.Jobs))
@@ -420,13 +511,13 @@ func (b *Builder) runStageJobsDAG(
 			case isBuildImageJob(jb.Type):
 				return b.runBuildImageJobIsolated(ctx, jsink, jrep, r, jb, stage, proj, settings, hasPushJob)
 			case isDeployJob(jb.Type):
-				return b.runDeployJob(ctx, jrep, jb, r.ID, r.Trigger.Params)
+				return b.runDeployJob(ctx, jrep, jb, r.ID, r.Trigger.Params, stageResolved)
 			case strings.TrimSpace(jb.Type) == "push_image":
 				// 推送随构建镜像节点完成(hasPushJob);本节点仅用于在 DAG 中编排顺序/展示。
 				_ = jrep.Log(ctx, streamStdout, fmt.Sprintf("· 推送镜像「%s」:已随构建镜像节点完成推送(本节点用于编排顺序)", jb.Name))
 				return nil
 			case strings.TrimSpace(jb.Type) == "notify":
-				b.runNotifyJob(ctx, jrep, jb, r)
+				b.runNotifyJob(ctx, jrep, jb, r, stageResolved)
 				return nil
 			default:
 				_ = jrep.Log(ctx, streamStdout, fmt.Sprintf("· %s(%s)— 真实执行未接入;本节点放行", jb.Name, jb.Type))
@@ -473,12 +564,13 @@ func (b *Builder) runStageJobsDAG(
 }
 
 // cloneJobWorkspace 为单个 job 克隆一份独立的临时工作区(并发安全),并恢复本 run 已归档的上游产物。
-// 返回 (workspace, commitTag, cleanup, err);调用方务必在用完后调用 cleanup()。失败时已自行清理。
-func (b *Builder) cloneJobWorkspace(ctx context.Context, r *run.Run, proj *project.Project, rep dagrun.StageReporter) (string, string, func(), error) {
+// 返回 (workspace, resolved, cleanup, err);resolved 携带检出 commit 的完整元数据(供 env/占位符/模板使用),
+// 调用方务必在用完后调用 cleanup()。失败时已自行清理。
+func (b *Builder) cloneJobWorkspace(ctx context.Context, r *run.Run, proj *project.Project, rep dagrun.StageReporter) (string, *CloneResolved, func(), error) {
 	ws, mkErr := mkTempWorkspace()
 	if mkErr != nil {
 		_ = rep.Log(ctx, streamStderr, "创建临时工作区失败:"+mkErr.Error())
-		return "", "", func() {}, ErrBuildFailed
+		return "", nil, func() {}, ErrBuildFailed
 	}
 	cleanup := func() { _ = os.RemoveAll(ws) }
 
@@ -488,21 +580,17 @@ func (b *Builder) cloneJobWorkspace(ctx context.Context, r *run.Run, proj *proje
 	if cerr != nil {
 		cleanup()
 		if errors.Is(ctx.Err(), context.Canceled) {
-			return "", "", func() {}, run.ErrCanceled
+			return "", nil, func() {}, run.ErrCanceled
 		}
-		_ = rep.Log(ctx, streamStderr, "源码克隆失败(鉴权/网络/ref 不存在或被 SSRF 拒绝)")
-		return "", "", func() {}, ErrBuildFailed
+		_ = rep.Log(ctx, streamStderr, "源码克隆失败(鉴权/网络/ref 不存在或被 SSRF 拒绝): "+cerr.Error())
+		return "", nil, func() {}, ErrBuildFailed
 	}
-	commitTag := "latest"
-	if resolved != nil && resolved.CommitShort != "" {
-		commitTag = resolved.CommitShort
-		if b.recordCommit != nil {
-			b.recordCommit(ctx, r.ID, resolved.CommitShort) // 同一 commit;并发重复记录幂等无害
-		}
+	if resolved != nil && resolved.CommitShort != "" && b.recordCommit != nil {
+		b.recordCommit(ctx, r.ID, resolved.CommitShort) // 同一 commit;并发重复记录幂等无害
 	}
 	// 跨阶段 + 阶段内上游 job 产物:把本 run 已归档的 jar/dist 真字节恢复进本 job 工作区原相对路径。
 	b.restorePriorArtifacts(ctx, r, ws, rep)
-	return ws, commitTag, cleanup, nil
+	return ws, resolved, cleanup, nil
 }
 
 // runScriptJobIsolated 在独立工作区内执行单个 script 类 job(DAG 路径用)。返回该 job 写入
@@ -521,36 +609,36 @@ func (b *Builder) runScriptJobIsolated(
 	upstreamEnv []pipeline.BuildVar,
 	reportSink TestReportSink,
 ) ([]pipeline.BuildVar, error) {
-	ws, _, cleanup, err := b.cloneJobWorkspace(ctx, r, proj, rep)
+	ws, resolved, cleanup, err := b.cloneJobWorkspace(ctx, r, proj, rep)
 	if err != nil {
 		return nil, err
 	}
 	defer cleanup()
 
-	step, verr := scriptStepFromJob(jb)
+	step, verr := scriptStepFromJob(jb, resolved)
 	if verr != nil {
 		_ = rep.Log(ctx, streamStderr, fmt.Sprintf("script job「%s」配置无效:%v", jb.Name, verr))
 		return nil, ErrBuildFailed
 	}
 	// 注入顺序:运行参数 → 上游 job 输出 → 流水线级变量(「变量与缓存」,含 secret,vault 即取即用)
-	// → job 自身 env(后者覆盖同名)。此前流水线级变量只注入镜像构建路径、不到 script 步骤(漏),
-	// 导致脚本节点拿不到「变量与缓存」里配的 secret(如发版的 GITHUB_TOKEN)。本修复补齐。
+	// → 提交元数据环境变量(COMMIT_*) → job 自身 env(后者覆盖同名)。
 	base := append(runParamsAsEnv(r.Trigger.Params), upstreamEnv...)
 	if settings != nil && len(settings.Build.Vars) > 0 {
 		base = append(base, settings.Build.Vars...)
 	}
+	base = append(base, commitMetaAsEnv(resolved)...)
 	step.Env = append(base, step.Env...)
 	step.Env = append(step.Env, pipewrightEnvVar())
 	if svcNetwork != "" {
 		step.Resource.Network = svcNetwork
 	}
-	b.restoreJobCache(ctx, rep, jb, r.Trigger.Branch, ws)
+	b.restoreJobCache(ctx, rep, jb, r.Trigger.Branch, ws, resolved)
 	if err := b.runScriptStepWithOpts(ctx, sink, 0, step, ws); err != nil {
 		return nil, err // ErrBuildFailed / run.ErrCanceled
 	}
-	b.saveJobCache(ctx, rep, jb, r.Trigger.Branch, ws)
+	b.saveJobCache(ctx, rep, jb, r.Trigger.Branch, ws, resolved)
 	out := captureStageEnv(ctx, rep, ws)
-	b.collectScriptArtifacts(ctx, []pipeline.Job{jb}, ws, slugify(proj.Name), stage.Name, rep)
+	b.collectScriptArtifacts(ctx, []pipeline.Job{jb}, ws, slugify(proj.Name), stage.Name, resolved, rep)
 	if rerr := collectStageReport(ctx, reportSink, r, stage, ws, rep); rerr != nil {
 		return out, rerr // 质量门禁阻断
 	}
@@ -570,17 +658,17 @@ func (b *Builder) runBuildImageJobIsolated(
 	settings *pipeline.Settings,
 	hasPushJob bool,
 ) error {
-	ws, commitTag, cleanup, err := b.cloneJobWorkspace(ctx, r, proj, rep)
+	ws, resolved, cleanup, err := b.cloneJobWorkspace(ctx, r, proj, rep)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
-	return b.runBuildImageJob(ctx, sink, rep, jb, stage.Name, proj, settings, r.Trigger.ResolvedEnvironment, ws, commitTag, hasPushJob)
+	return b.runBuildImageJob(ctx, sink, rep, jb, stage.Name, proj, settings, r.Trigger.ResolvedEnvironment, ws, r, resolved, hasPushJob)
 }
 
 // runDeployJob 执行一个 deploy_ssh 节点:把本 run 已产出的产物经 SSH 部署到节点配置的目标机
 // (复用 deploy.Service.DeployForStage 中途部署,不动 run 终态)。任一目标失败 → 阶段失败、阻断下游。
-func (b *Builder) runDeployJob(ctx context.Context, rep dagrun.StageReporter, jb pipeline.Job, runID string, params map[string]string) error {
+func (b *Builder) runDeployJob(ctx context.Context, rep dagrun.StageReporter, jb pipeline.Job, runID string, params map[string]string, resolved *CloneResolved) error {
 	if b.deployer == nil {
 		_ = rep.Log(ctx, streamStdout, "· 部署节点:部署服务未注入,跳过")
 		return nil
@@ -592,11 +680,17 @@ func (b *Builder) runDeployJob(ctx context.Context, rep dagrun.StageReporter, jb
 	}
 	cfg := map[string]string{}
 	// deployPath / restartCommand 支持 {{param}} 占位:用本次运行参数渲染(命令型部署据此让
-	// 「本地端口 / 穿透端口」等随运行参数变化;非配置类部署不写占位 → renderTemplate 零开销直返)。
-	if dp := renderTemplate(cfgString(jb.Config, "deployPath"), params); dp != "" {
+	// 「本地端口 / 穿透端口」等随运行参数变化)。模板上下文 = config 字段 + 自由参数 + 提交元数据
+	// ({{commit_*}},与产物路径/构建缓存一致),运行参数覆盖同名 config 键(运行期优先)。
+	// 非配置类部署不写占位 → renderTemplate 零开销直返。
+	tplCtx := composeTemplateContext(jb.Config, resolved)
+	for k, v := range params {
+		tplCtx[k] = v
+	}
+	if dp := renderTemplate(cfgString(jb.Config, "deployPath"), tplCtx); dp != "" {
 		cfg["releaseBase"] = dp
 	}
-	if rc := renderTemplate(cfgString(jb.Config, "restartCommand"), params); rc != "" {
+	if rc := renderTemplate(cfgString(jb.Config, "restartCommand"), tplCtx); rc != "" {
 		cfg["restartCommand"] = rc
 	}
 	// 镜像产物部署参数(#51)透传:deploy.DeployForStage 经这些键挑镜像产物并组装
@@ -638,7 +732,7 @@ func (b *Builder) runDeployJob(ctx context.Context, rep dagrun.StageReporter, jb
 
 // runNotifyJob 执行一个 notify 节点:按节点配的渠道(id 或名称)发一条通知。
 // best-effort:通知失败只记日志、不令阶段失败(与终态通知钩子一致)。
-func (b *Builder) runNotifyJob(ctx context.Context, rep dagrun.StageReporter, jb pipeline.Job, r *run.Run) {
+func (b *Builder) runNotifyJob(ctx context.Context, rep dagrun.StageReporter, jb pipeline.Job, r *run.Run, resolved *CloneResolved) {
 	if b.notifier == nil {
 		_ = rep.Log(ctx, streamStdout, "· 通知节点:通知服务未注入,跳过")
 		return
@@ -674,6 +768,15 @@ func (b *Builder) runNotifyJob(ctx context.Context, rep dagrun.StageReporter, jb
 			Status:  r.Status,
 			Event:   "notify",
 			RunID:   r.ID,
+		}
+		// 提交元数据(best-effort):notify 节点不一定克隆过工作区(resolved 可能为 nil),
+		// 此时对应占位 {{commitAuthor}}/{{commitMessage}}/{{commitTime}} 渲染为空串(向后兼容)。
+		if resolved != nil {
+			vars.CommitAuthor = resolved.Author
+			vars.CommitMessage = resolved.Message
+			if !resolved.Time.IsZero() {
+				vars.CommitTime = resolved.Time.Format(time.RFC3339)
+			}
 		}
 		if titleTpl != "" {
 			payload.Title = notify.RenderText(titleTpl, vars)
@@ -711,7 +814,7 @@ func (b *Builder) resolveChannel(ctx context.Context, ref string) (id, name stri
 // 镜像产物:环境绑定了 registry(或本阶段含 push_image 节点示意要推)→ b.push 推送并改写为远端引用 + digest;
 // 无 registry → 镜像留本地,emit 本地 tag。其它产物(jar/dist)直接 emit。失败映射 ErrBuildFailed / 取消。
 // 边界:docker build 上下文沿用工作区根(子目录上下文 = 后续);buildCommand 覆盖工具链默认命令 = 后续。
-func (b *Builder) runBuildImageJob(ctx context.Context, sink run.StepSink, rep dagrun.StageReporter, jb pipeline.Job, stageName string, proj *project.Project, settings *pipeline.Settings, envName, workspace, commitTag string, hasPushJob bool) error {
+func (b *Builder) runBuildImageJob(ctx context.Context, sink run.StepSink, rep dagrun.StageReporter, jb pipeline.Job, stageName string, proj *project.Project, settings *pipeline.Settings, envName, workspace string, r *run.Run, resolved *CloneResolved, hasPushJob bool) error {
 	cfg := pipeline.BuildConfig{
 		Model:          cfgString(jb.Config, "buildModel"),
 		DockerfilePath: cfgString(jb.Config, "dockerfilePath"),
@@ -725,8 +828,21 @@ func (b *Builder) runBuildImageJob(ctx context.Context, sink run.StepSink, rep d
 	if cfg.Model == "" {
 		cfg.Model = pipeline.BuildModelDockerfile
 	}
+	// 镜像名:节点 imageName(如 org/app)优先;空 → 项目名 slug(历史默认)。作用于本地构建名与远程推送名。
+	imageName := cfgString(jb.Config, "imageName")
 
-	localTag, art, berr := b.build(ctx, sink, 0, proj, cfg, workspace, commitTag)
+	// 镜像 tag:未配 tag 字段 → 默认用检出 commit 短 sha(向后兼容既有行为);配了 tag 字段(支持
+	// ${COMMIT_SHA}/${COMMIT_AUTHOR}/${COMMIT_MESSAGE}/${COMMIT_TIME}/${BRANCH}/${BUILD_NUMBER} 占位符)
+	// → 展开真实值后作为 tag。expandTagPlaceholders 无 ${ 时零开销直返,固定字符串 tag 不受影响。
+	commitTag := "latest"
+	if resolved != nil && resolved.CommitShort != "" {
+		commitTag = resolved.CommitShort
+	}
+	if cfgTag := cfgString(jb.Config, "tag"); cfgTag != "" {
+		commitTag = expandTagPlaceholders(cfgTag, r, resolved)
+	}
+
+	localTag, art, berr := b.build(ctx, sink, 0, proj, cfg, workspace, commitTag, imageName)
 	if berr != nil {
 		if errors.Is(ctx.Err(), context.Canceled) {
 			return run.ErrCanceled
@@ -743,7 +859,7 @@ func (b *Builder) runBuildImageJob(ctx context.Context, sink run.StepSink, rep d
 		registry := b.resolveRegistry(settings, envName)
 		switch {
 		case registry != nil:
-			remoteTag, digest, perr := b.push(ctx, sink, 0, localTag, registry, proj, commitTag)
+			remoteTag, digest, perr := b.push(ctx, sink, 0, localTag, registry, proj, commitTag, imageName)
 			if perr != nil {
 				if errors.Is(ctx.Err(), context.Canceled) {
 					return run.ErrCanceled
@@ -780,10 +896,10 @@ func (b *Builder) runBuildImageJob(ctx context.Context, sink run.StepSink, rep d
 // 逐条定位工作区内路径 → 按类型(目录=dist、*.jar=jar、其它文件=archive)归档进制品库真字节 →
 // EmitArtifact 登记。一个 job 可声明多条(既出 jar 又出 dist 等);未声明则跳过。
 // 镜像类产物不走这里(走 build_image 节点);文件类才在此收集。
-func (b *Builder) collectScriptArtifacts(ctx context.Context, jobs []pipeline.Job, workspace, slug, stageName string, rep dagrun.StageReporter) {
+func (b *Builder) collectScriptArtifacts(ctx context.Context, jobs []pipeline.Job, workspace, slug, stageName string, resolved *CloneResolved, rep dagrun.StageReporter) {
 	onLine := func(stream, line string) { _ = rep.Log(ctx, stream, line) }
 	for _, jb := range jobs {
-		for _, rel := range splitCommands(renderTemplate(cfgString(jb.Config, "artifactPath"), templateContext(jb.Config))) { // 渲染 {{参数}} + 按行拆分
+		for _, rel := range splitCommands(renderTemplate(cfgString(jb.Config, "artifactPath"), composeTemplateContext(jb.Config, resolved))) { // 渲染 {{参数}}/{{commit_*}} + 按行拆分
 			// 通配(如 backend/target/*.jar)→ 展开为实际文件逐个收集;否则按原路径收集。
 			if strings.ContainsAny(rel, "*?[") {
 				clean := filepath.Clean(rel)
@@ -852,8 +968,8 @@ func (b *Builder) collectOneFileArtifact(ctx context.Context, workspace, rel, sl
 
 // scriptStepFromJob 从画布 job.Config 构造一条 script 步骤(image + 多行 commands + 可选 workDir)。
 // image 缺失或 commands 全空 → 错误(诚实失败,不静默跳过)。
-func scriptStepFromJob(jb pipeline.Job) (pipeline.PipelineStep, error) {
-	ctx := templateContext(jb.Config)
+func scriptStepFromJob(jb pipeline.Job, resolved *CloneResolved) (pipeline.PipelineStep, error) {
+	ctx := composeTemplateContext(jb.Config, resolved)
 	image := renderTemplate(cfgString(jb.Config, "image"), ctx)
 	if image == "" {
 		return pipeline.PipelineStep{}, errors.New("缺少运行镜像(image)")

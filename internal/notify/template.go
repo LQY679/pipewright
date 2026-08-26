@@ -75,20 +75,28 @@ type TemplateVars struct {
 	// Params 是本次运行的参数(如发版审批的 VERSION);非空时透出到 Payload.Fields + 正文,
 	// 让审批卡片展示「要发哪个版本」等汇总信息(审批人据此审核)。键原样、值已是明文非 secret。
 	Params map[string]string
+	// CommitAuthor / CommitMessage / CommitTime 是检出 commit 的元数据(可选,由 build 包透传
+	// CloneResolved 填充;空则模板对应占位 {{commitAuthor}}/{{commitMessage}}/{{commitTime}} 渲染为空串)。
+	CommitAuthor  string
+	CommitMessage string
+	CommitTime    string
 }
 
 // asMap 把 TemplateVars 展开为占位名 → 值的映射(冻结占位名)。
 func (v TemplateVars) asMap() map[string]string {
 	return map[string]string{
-		"project":      v.Project,
-		"branch":       v.Branch,
-		"commit":       v.Commit,
-		"status":       v.Status,
-		"event":        v.Event,
-		"durationMs":   v.DurationMs,
-		"runId":        v.RunID,
-		"errorSummary": v.ErrorSummary,
-		"actionUrl":    v.ActionURL,
+		"project":       v.Project,
+		"branch":        v.Branch,
+		"commit":        v.Commit,
+		"status":        v.Status,
+		"event":         v.Event,
+		"durationMs":    v.DurationMs,
+		"runId":         v.RunID,
+		"errorSummary":  v.ErrorSummary,
+		"actionUrl":     v.ActionURL,
+		"commitAuthor":  v.CommitAuthor,
+		"commitMessage": v.CommitMessage,
+		"commitTime":    v.CommitTime,
 	}
 }
 

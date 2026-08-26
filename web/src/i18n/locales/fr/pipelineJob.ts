@@ -93,8 +93,9 @@ export default {
   typePushImageDesc: 'Pousse l’image vers un registre de conteneurs',
   fieldRegistryLabel: 'URL du registre d’images',
   fieldImageNameLabel: 'Nom de l’image',
+  fieldImageNameHint: 'Facultatif. Nom de l’image (ex. org/app). Laisser vide = nom du projet',
   fieldTagLabel: 'Tag',
-  fieldTagHint: 'Variables disponibles : {\'${COMMIT_SHA}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
+  fieldTagHint: 'Variables disponibles : {\'${COMMIT_SHA}\'} {\'${COMMIT_AUTHOR}\'} {\'${COMMIT_MESSAGE}\'} {\'${COMMIT_TIME}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
   fieldRegistryCredentialLabel: 'Identifiant du registre',
   fieldRegistryCredentialHint: 'Référence l’identifiant de connexion au registre d’images',
 
@@ -136,7 +137,7 @@ export default {
   fieldParamsLabel: 'Table des paramètres',
   fieldParamsHint: 'Un key=value par ligne, totalement libre ; référencez avec {\'{{key}}\'} dans le modèle de commande / les chemins d’artefacts',
   fieldCommandTemplateLabel: 'Modèle de commande',
-  fieldCommandTemplateHint: 'Multiligne ; {\'{{paramètre}}\'} est remplacé par la valeur de la table des paramètres, $ENV reste géré par le shell du conteneur',
+  fieldCommandTemplateHint: 'Multiligne ; {\'{{paramètre}}\'} est remplacé par la valeur de la table des paramètres ; prend aussi en charge {\'{{commit_sha}}\'} {\'{{commit_author}}\'} {\'{{commit_message}}\'} {\'{{commit_time}}\'}, $ENV reste géré par le shell du conteneur',
   fieldTemplatedArtifactPathHint: 'Optionnel, un par ligne, prend en charge {\'{{paramètre}}\'} et les jokers ; répertoire→dist, *.jar→jar, autre→archive',
   fieldTemplatedWorkDirHint: 'Optionnel, relatif à la racine de l’espace de travail cloné',
   fieldTemplatedCachePathsHint:

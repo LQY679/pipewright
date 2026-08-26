@@ -93,8 +93,9 @@ export default {
   typePushImageDesc: 'イメージをコンテナレジストリにプッシュ',
   fieldRegistryLabel: 'イメージレジストリ URL',
   fieldImageNameLabel: 'イメージ名',
+  fieldImageNameHint: '任意。イメージ名(例: org/app)。空欄の場合はプロジェクト名がデフォルト',
   fieldTagLabel: 'タグ',
-  fieldTagHint: '使用可能な変数:{\'${COMMIT_SHA}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
+  fieldTagHint: '使用可能な変数:{\'${COMMIT_SHA}\'} {\'${COMMIT_AUTHOR}\'} {\'${COMMIT_MESSAGE}\'} {\'${COMMIT_TIME}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
   fieldRegistryCredentialLabel: 'レジストリ認証情報',
   fieldRegistryCredentialHint: 'イメージレジストリのログイン認証情報を参照',
 
@@ -136,7 +137,7 @@ export default {
   fieldParamsLabel: 'パラメータ表',
   fieldParamsHint: '1 行 1 件の key=value、完全に自由。コマンドテンプレート/成果物パスで {\'{{key}}\'} で参照',
   fieldCommandTemplateLabel: 'コマンドテンプレート',
-  fieldCommandTemplateHint: '複数行。{\'{{パラメータ}}\'} はパラメータ表の値に置換、$ENV はコンテナ内 shell に任せる',
+  fieldCommandTemplateHint: '複数行。{\'{{パラメータ}}\'} はパラメータ表の値に置換;さらに {\'{{commit_sha}}\'} {\'{{commit_author}}\'} {\'{{commit_message}}\'} {\'{{commit_time}}\'} 也对応、$ENV はコンテナ内 shell に任せる',
   fieldTemplatedArtifactPathHint: '任意、1 行 1 件、{\'{{パラメータ}}\'} とワイルドカードに対応。ディレクトリ→dist、*.jar→jar、その他→archive',
   fieldTemplatedWorkDirHint: '任意、クローンしたワークスペースのルートからの相対',
   fieldTemplatedCachePathsHint:

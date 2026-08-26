@@ -240,7 +240,7 @@ func (b *Builder) Run(ctx context.Context, r *run.Run, sink run.StepSink) error 
 		if errors.Is(ctx.Err(), context.Canceled) {
 			return b.cancelAt(ctx, sink, 0)
 		}
-		_ = sink.Log(ctx, streamStderr, 0, "源码克隆失败(鉴权/网络/ref 不存在或被 SSRF 拒绝)")
+		_ = sink.Log(ctx, streamStderr, 0, "源码克隆失败(鉴权/网络/ref 不存在或被 SSRF 拒绝): "+cerr.Error())
 		return b.failStep(ctx, sink, 0, "源码克隆失败:"+cerr.Error())
 	}
 	if resolved != nil && resolved.CommitShort != "" && b.recordCommit != nil {
@@ -262,7 +262,7 @@ func (b *Builder) Run(ctx context.Context, r *run.Run, sink run.StepSink) error 
 	if err := sink.StepRunning(ctx, 1); err != nil {
 		return err
 	}
-	localTag, artifact, berr := b.build(ctx, sink, 1, proj, settings.Build, workspace, commitTag)
+	localTag, artifact, berr := b.build(ctx, sink, 1, proj, settings.Build, workspace, commitTag, "")
 	if berr != nil {
 		if errors.Is(ctx.Err(), context.Canceled) {
 			return b.cancelAt(ctx, sink, 1)
@@ -281,7 +281,7 @@ func (b *Builder) Run(ctx context.Context, r *run.Run, sink run.StepSink) error 
 		if err := sink.StepRunning(ctx, 2); err != nil {
 			return err
 		}
-		remoteTag, pdigest, perr := b.push(ctx, sink, 2, localTag, registry, proj, commitTag)
+		remoteTag, pdigest, perr := b.push(ctx, sink, 2, localTag, registry, proj, commitTag, "")
 		if perr != nil {
 			if errors.Is(ctx.Err(), context.Canceled) {
 				return b.cancelAt(ctx, sink, 2)
@@ -377,13 +377,22 @@ func (b *Builder) resolveRegistry(settings *pipeline.Settings, envName string) *
 //   - 模型 A(dockerfile)或产物=image:docker build -f <DockerfilePath> -t <local-tag> .
 //   - 模型 B(toolchain)产 jar/dist:docker run --rm -v ws:/src -w /src <toolchain:ver> <build-cmd>;
 //     对 image 产物退化为要求 Dockerfile(走模型 A 路径)。
-func (b *Builder) build(ctx context.Context, sink run.StepSink, ordinal int, proj *project.Project, cfg pipeline.BuildConfig, workspace, commitTag string) (string, *run.Artifact, error) {
+//
+// imageName 是节点配置的镜像名(如 org/app;含 "/" 保留原样,仅去首尾斜杠)。空 → 沿用
+// 项目名 slug(历史默认),完全向后兼容。本地镜像名 = pipewright/<name>:<commitTag>。
+func (b *Builder) build(ctx context.Context, sink run.StepSink, ordinal int, proj *project.Project, cfg pipeline.BuildConfig, workspace, commitTag, imageName string) (string, *run.Artifact, error) {
 	onLine := b.lineSink(sink, ordinal)
 
 	// 构建变量:非 secret → 明文 K=V;secret → vault.Reveal 明文 K=V(注入子进程,绝不回显值)。
 	buildArgs, secretArgs := b.buildArgs(cfg.Vars)
 
+	// 镜像名:节点 imageName(如 org/app,原样保留)优先;空 → 项目名 slug(历史默认)。
+	// jar/dist 产物名沿用项目 slug(imageName 仅作用于镜像)。
 	slug := slugify(proj.Name)
+	name := strings.Trim(strings.TrimSpace(imageName), "/")
+	if name == "" {
+		name = slug
+	}
 
 	switch cfg.ArtifactType {
 	case pipeline.ArtifactImage:
@@ -402,7 +411,7 @@ func (b *Builder) build(ctx context.Context, sink run.StepSink, ordinal int, pro
 				dockerfile = filepath.Join(workspace, dockerfile)
 			}
 		}
-		localTag := localTagPrefix + "/" + slug + ":" + commitTag
+		localTag := localTagPrefix + "/" + name + ":" + commitTag
 		code, err := b.driver.Build(ctx, contextDir, dockerfile, localTag, buildArgs, secretArgs, onLine)
 		if err != nil && code < 0 {
 			return "", nil, fmt.Errorf("构建器无法启动")
@@ -413,7 +422,7 @@ func (b *Builder) build(ctx context.Context, sink run.StepSink, ordinal int, pro
 		digest, size, _ := b.driver.InspectImage(ctx, localTag)
 		art := &run.Artifact{
 			Type:      run.ArtifactImage,
-			Name:      slug,
+			Name:      name,
 			Reference: localTag,
 			SizeBytes: size,
 			Metadata: map[string]any{
@@ -449,12 +458,17 @@ func (b *Builder) build(ctx context.Context, sink run.StepSink, ordinal int, pro
 }
 
 // push 执行镜像推送(3-5):login(口令经 stdin)→ tag → push → inspect 取推送后 digest。
-func (b *Builder) push(ctx context.Context, sink run.StepSink, ordinal int, localTag string, registry *pipeline.ImageRegistry, proj *project.Project, commitTag string) (string, string, error) {
+// imageName 是节点配置的镜像名(如 org/app,原样保留);空 → 项目名 slug(历史默认)。
+// 远端 tag:<registry-url>/<name>:<commit7>(URL 去协议/尾斜杠)。
+func (b *Builder) push(ctx context.Context, sink run.StepSink, ordinal int, localTag string, registry *pipeline.ImageRegistry, proj *project.Project, commitTag, imageName string) (string, string, error) {
 	onLine := b.lineSink(sink, ordinal)
 
 	user, pass := b.revealRegistryCred(registry.CredentialID)
-	// 远端 tag:<registry-url>/<project-slug>:<commit7>(URL 去协议/尾斜杠)。
-	remoteTag := strings.TrimRight(stripScheme(registry.URL), "/") + "/" + slugify(proj.Name) + ":" + commitTag
+	name := strings.Trim(strings.TrimSpace(imageName), "/")
+	if name == "" {
+		name = slugify(proj.Name)
+	}
+	remoteTag := strings.TrimRight(stripScheme(registry.URL), "/") + "/" + name + ":" + commitTag
 
 	// 登录(口令经 stdin,绝不进 argv/日志)。凭据缺失(user 空)时跳过登录,直接 tag/push
 	// (匿名/已登录场景);仓库要求鉴权则 push 自身会失败并落失败日志。

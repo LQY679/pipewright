@@ -93,8 +93,9 @@ export default {
   typePushImageDesc: '推送镜像到容器仓库',
   fieldRegistryLabel: '镜像仓库地址',
   fieldImageNameLabel: '镜像名',
+  fieldImageNameHint: '可选,镜像名(如 org/app);留空则默认使用项目名作为镜像名',
   fieldTagLabel: '标签',
-  fieldTagHint: '可用变量:{\'${COMMIT_SHA}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
+  fieldTagHint: '可用变量:{\'${COMMIT_SHA}\'} {\'${COMMIT_AUTHOR}\'} {\'${COMMIT_MESSAGE}\'} {\'${COMMIT_TIME}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
   fieldRegistryCredentialLabel: '仓库凭据',
   fieldRegistryCredentialHint: '引用镜像仓库登录凭据',
 
@@ -136,7 +137,7 @@ export default {
   fieldParamsLabel: '参数表',
   fieldParamsHint: '每行一条 key=value,完全自由;命令模板/产物路径里用 {\'{{key}}\'} 引用',
   fieldCommandTemplateLabel: '命令模板',
-  fieldCommandTemplateHint: '多行;{\'{{参数}}\'} 会被参数表的值替换,$ENV 仍交给容器内 shell',
+  fieldCommandTemplateHint: '多行;{\'{{参数}}\'} 会被参数表的值替换;另支持 {\'{{commit_sha}}\'} {\'{{commit_author}}\'} {\'{{commit_message}}\'} {\'{{commit_time}}\'},$ENV 仍交给容器内 shell',
   fieldTemplatedArtifactPathHint: '可选,每行一条,支持 {\'{{参数}}\'} 与通配;目录→dist、*.jar→jar、其它→archive',
   fieldTemplatedWorkDirHint: '可选,相对克隆工作区根',
   fieldTemplatedCachePathsHint:

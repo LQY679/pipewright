@@ -189,6 +189,18 @@ func (c *Cache) checkoutFromMirror(ctx context.Context, mirror, branch, commit, 
 	} else if head, herr := repo.Head(); herr == nil {
 		resolved.CommitShort = shortSHA(head.Hash().String())
 	}
+
+	// 解析完整 commit 元数据(作者 / 备注 / 时间):与 build.Cloner 同语义,供环境变量与模板占位符使用。
+	// 解析失败仅留空字段,绝不阻断构建;HEAD 已在本地镜像中,无需额外网络。
+	if head, herr := repo.Head(); herr == nil {
+		if commitObj, cerr := repo.CommitObject(head.Hash()); cerr == nil {
+			resolved.Author = commitObj.Author.Name
+			// 提交备注常含多行换行;压成单行(按所有空白切分后空格重连),
+			// 确保经 docker run -e KEY=val 注入容器时不会被 shell 截断/错误解析。
+			resolved.Message = strings.Join(strings.Fields(commitObj.Message), " ")
+			resolved.Time = commitObj.Author.When
+		}
+	}
 	return resolved, nil
 }
 

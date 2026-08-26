@@ -3,6 +3,7 @@
 /pipewright-*
 *.test
 *.out
+*.log
 # GoReleaser 发版产物(本地 snapshot / release 的输出目录),不入库
 /dist/
 *.db
@@ -53,3 +54,4 @@
 /_bmad-output/
 /.claude/
 /CLAUDE.md
+

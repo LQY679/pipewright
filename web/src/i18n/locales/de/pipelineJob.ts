@@ -93,8 +93,9 @@ export default {
   typePushImageDesc: 'Pusht das Image in eine Container-Registry',
   fieldRegistryLabel: 'Image-Registry-URL',
   fieldImageNameLabel: 'Image-Name',
+  fieldImageNameHint: 'Optional. Image-Name (z. B. org/app). Leer lassen = Projektname',
   fieldTagLabel: 'Tag',
-  fieldTagHint: 'Verfügbare Variablen: {\'${COMMIT_SHA}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
+  fieldTagHint: 'Verfügbare Variablen: {\'${COMMIT_SHA}\'} {\'${COMMIT_AUTHOR}\'} {\'${COMMIT_MESSAGE}\'} {\'${COMMIT_TIME}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
   fieldRegistryCredentialLabel: 'Registry-Anmeldedaten',
   fieldRegistryCredentialHint: 'Referenziert die Login-Anmeldedaten der Image-Registry',
 
@@ -136,7 +137,7 @@ export default {
   fieldParamsLabel: 'Parametertabelle',
   fieldParamsHint: 'Ein key=value pro Zeile, völlig frei; in der Befehlsvorlage / den Artefaktpfaden mit {\'{{key}}\'} referenzieren',
   fieldCommandTemplateLabel: 'Befehlsvorlage',
-  fieldCommandTemplateHint: 'Mehrzeilig; {\'{{Parameter}}\'} wird durch den Wert der Parametertabelle ersetzt, $ENV wird weiterhin von der Shell im Container verarbeitet',
+  fieldCommandTemplateHint: 'Mehrzeilig; {\'{{Parameter}}\'} wird durch den Wert der Parametertabelle ersetzt; zusätzlich unterstützt {\'{{commit_sha}}\'} {\'{{commit_author}}\'} {\'{{commit_message}}\'} {\'{{commit_time}}\'}, $ENV wird weiterhin von der Shell im Container verarbeitet',
   fieldTemplatedArtifactPathHint: 'Optional, einer pro Zeile, unterstützt {\'{{Parameter}}\'} und Wildcards; Verzeichnis→dist, *.jar→jar, andere→archive',
   fieldTemplatedWorkDirHint: 'Optional, relativ zur Wurzel des geklonten Workspaces',
   fieldTemplatedCachePathsHint:

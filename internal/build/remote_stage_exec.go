@@ -91,7 +91,7 @@ func (b *Builder) runStageRemote(ctx context.Context, r *run.Run, stage pipeline
 		if errors.Is(ctx.Err(), context.Canceled) {
 			return run.ErrCanceled
 		}
-		_ = rep.Log(ctx, streamStderr, "源码克隆失败(鉴权/网络/ref 不存在或被 SSRF 拒绝)")
+		_ = rep.Log(ctx, streamStderr, "源码克隆失败(鉴权/网络/ref 不存在或被 SSRF 拒绝): "+cerr.Error())
 		return ErrBuildFailed
 	}
 	if resolved != nil && resolved.CommitShort != "" && b.recordCommit != nil {
@@ -120,12 +120,15 @@ func (b *Builder) runStageRemote(ctx context.Context, r *run.Run, stage pipeline
 		if canceled(ctx) {
 			return run.ErrCanceled
 		}
-		step, verr := scriptStepFromJob(jb)
+		step, verr := scriptStepFromJob(jb, resolved)
 		if verr != nil {
 			_ = rep.Log(ctx, streamStderr, fmt.Sprintf("script job「%s」配置无效:%v", jb.Name, verr))
 			return ErrBuildFailed
 		}
-		step.Env = append(runParamsAsEnv(r.Trigger.Params), step.Env...)
+		// 注入顺序与本地路径一致:运行参数 → 提交元数据环境变量(COMMIT_*) → job 自身 env(后者覆盖同名)。
+		base := runParamsAsEnv(r.Trigger.Params)
+		base = append(base, commitMetaAsEnv(resolved)...)
+		step.Env = append(base, step.Env...)
 		if err := b.runScriptOnDriver(ctx, driver, onLine, step, remoteWS); err != nil {
 			return err
 		}

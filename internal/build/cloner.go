@@ -3,6 +3,7 @@ package build
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/url"
 	"os"
@@ -40,9 +41,13 @@ type Cloner struct {
 // NewCloner 构造生产 Cloner(严格 SSRF 收口)。
 func NewCloner() *Cloner { return &Cloner{} }
 
-// CloneResolved 是克隆结果:实际检出的 commit 短 sha(供产物 tag/引用),空则未解析出。
+// CloneResolved 是克隆结果:实际检出的 commit 元数据(供产物 tag / 环境变量 / 模板占位符)。
+// 字段为空表示未解析出(解析失败 / 浅克隆不可达时优雅降级,绝不阻断构建)。
 type CloneResolved struct {
-	CommitShort string
+	CommitShort string // 检出 commit 的短 sha(前 7 位),供产物 tag / 引用
+	Author      string // 提交作者名(c.Author.Name)
+	Message     string // 提交备注(已压成单行,消除换行,确保环境变量安全)
+	Time        time.Time // 提交时间(c.Author.When)
 }
 
 // Clone 把 repoURL 在 ref(commit sha 优先,否则分支名;皆空则默认分支)上克隆到 destDir。
@@ -83,8 +88,9 @@ func (c *Cloner) Clone(ctx context.Context, repoURL, username, token, branch, co
 
 	repo, err := gogit.PlainCloneContext(cctx, destDir, false, opts)
 	if err != nil {
-		// 浅克隆 + 指定分支失败时不再重试(可能是鉴权/不可达);映射干净错误。
-		return nil, ErrCloneFailed
+		// 浅克隆 + 指定分支失败时不再重试(可能是鉴权/不可达)。外层用 %w 保留 ErrCloneFailed
+		// 以维持 errors.Is 判断,同时把底层文本带给日志(安全:token 经 BasicAuth 传,不进 URL/错误)。
+		return nil, fmt.Errorf("%w: %v", ErrCloneFailed, err)
 	}
 
 	resolved := &CloneResolved{}
@@ -95,11 +101,23 @@ func (c *Cloner) Clone(ctx context.Context, repoURL, username, token, branch, co
 		}
 		hash := plumbing.NewHash(commit)
 		if cerr := wt.Checkout(&gogit.CheckoutOptions{Hash: hash, Force: true}); cerr != nil {
-			return nil, ErrCloneFailed
+			return nil, fmt.Errorf("%w: %v", ErrCloneFailed, cerr)
 		}
 		resolved.CommitShort = shortSHA(commit)
 	} else if head, herr := repo.Head(); herr == nil {
 		resolved.CommitShort = shortSHA(head.Hash().String())
+	}
+
+	// 解析完整 commit 元数据(作者 / 备注 / 时间):供环境变量与模板占位符使用。
+	// 解析失败仅留空字段,绝不阻断构建;浅克隆 Depth:1 的 HEAD commit 本地可达,无需额外网络。
+	if head, herr := repo.Head(); herr == nil {
+		if commitObj, cerr := repo.CommitObject(head.Hash()); cerr == nil {
+			resolved.Author = commitObj.Author.Name
+			// 提交备注常含多行换行;压成单行(按所有空白切分后空格重连),
+			// 确保经 docker run -e KEY=val 注入容器时不会被 shell 截断/错误解析。
+			resolved.Message = strings.Join(strings.Fields(commitObj.Message), " ")
+			resolved.Time = commitObj.Author.When
+		}
 	}
 	return resolved, nil
 }

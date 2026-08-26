@@ -14,7 +14,7 @@ import (
 //   - cachePaths:多行,每行一个相对工作区根的目录(node_modules / .m2/repository / .gradle 等)。
 //     仅当配了 cachePaths 才启用缓存(空 → 跳过,零开销)。
 //   - cacheKey  :可选 key 模板;留空用默认推导(分支 + 工作区内 lockfile 们的内容 hash)。
-//     模板里的 {{参数}} 由 templateContext 渲染(与命令/产物路径一致)。
+//     模板里的 {{参数}} 由 composeTemplateContext 渲染(与命令/产物路径一致,同样支持 {{commit_*}})。
 //
 // 可靠性铁律:缓存问题绝不让构建失败 —— 恢复未命中/失败 = 冷构建;保存失败 = 只记日志。
 
@@ -26,9 +26,10 @@ type jobCacheConfig struct {
 }
 
 // parseCacheConfig 从 job.Config 解析缓存配置(cachePaths 多行 + 可选 cacheKey 模板,渲染 {{参数}})。
+// 模板上下文 = config 字段 + 自由参数 + 提交元数据({{commit_*}},与产物路径一致)。resolved 可空。
 // 没配 cachePaths → enabled=false(调用方跳过)。
-func parseCacheConfig(jb pipeline.Job) jobCacheConfig {
-	tplCtx := templateContext(jb.Config)
+func parseCacheConfig(jb pipeline.Job, resolved *CloneResolved) jobCacheConfig {
+	tplCtx := composeTemplateContext(jb.Config, resolved)
 	paths := splitCommands(renderTemplate(cfgString(jb.Config, "cachePaths"), tplCtx))
 	if len(paths) == 0 {
 		return jobCacheConfig{enabled: false}
@@ -42,11 +43,11 @@ func parseCacheConfig(jb pipeline.Job) jobCacheConfig {
 
 // restoreJobCache 恢复 job 的缓存到工作区(best-effort:未命中/失败=冷构建,只记日志)。
 // 缓存库未注入或 job 未配 cachePaths → 无操作。branch 用于默认 key 推导。
-func (b *Builder) restoreJobCache(ctx context.Context, rep dagrun.StageReporter, jb pipeline.Job, branch, workspace string) {
+func (b *Builder) restoreJobCache(ctx context.Context, rep dagrun.StageReporter, jb pipeline.Job, branch, workspace string, resolved *CloneResolved) {
 	if b.buildCache == nil {
 		return
 	}
-	cc := parseCacheConfig(jb)
+	cc := parseCacheConfig(jb, resolved)
 	if !cc.enabled {
 		return
 	}
@@ -66,11 +67,11 @@ func (b *Builder) restoreJobCache(ctx context.Context, rep dagrun.StageReporter,
 
 // saveJobCache 把 job 的缓存路径保存回缓存库(best-effort:保存失败只记日志,不阻断构建)。
 // 缓存库未注入或 job 未配 cachePaths → 无操作。
-func (b *Builder) saveJobCache(ctx context.Context, rep dagrun.StageReporter, jb pipeline.Job, branch, workspace string) {
+func (b *Builder) saveJobCache(ctx context.Context, rep dagrun.StageReporter, jb pipeline.Job, branch, workspace string, resolved *CloneResolved) {
 	if b.buildCache == nil {
 		return
 	}
-	cc := parseCacheConfig(jb)
+	cc := parseCacheConfig(jb, resolved)
 	if !cc.enabled {
 		return
 	}

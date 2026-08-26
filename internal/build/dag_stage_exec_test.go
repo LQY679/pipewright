@@ -122,7 +122,7 @@ func TestScriptStepFromJob(t *testing.T) {
 		ID: "j1", Name: "test", Type: "script",
 		Config: map[string]any{"image": " node:20 ", "commands": "npm ci\n\nnpm test\n", "workDir": "app"},
 	}
-	step, err := scriptStepFromJob(jb)
+	step, err := scriptStepFromJob(jb, nil)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -138,10 +138,10 @@ func TestScriptStepFromJob(t *testing.T) {
 }
 
 func TestScriptStepFromJobMissing(t *testing.T) {
-	if _, err := scriptStepFromJob(pipeline.Job{Config: map[string]any{"commands": "x"}}); err == nil {
+	if _, err := scriptStepFromJob(pipeline.Job{Config: map[string]any{"commands": "x"}}, nil); err == nil {
 		t.Error("expected error for missing image")
 	}
-	if _, err := scriptStepFromJob(pipeline.Job{Config: map[string]any{"image": "x"}}); err == nil {
+	if _, err := scriptStepFromJob(pipeline.Job{Config: map[string]any{"image": "x"}}, nil); err == nil {
 		t.Error("expected error for missing commands")
 	}
 }
@@ -323,19 +323,23 @@ type imgDriver struct {
 	buildCalls    int
 	gotContextDir string
 	gotDockerfile string
+	gotLocalTag   string
+	gotTagDst     string
 }
 
 func (d *imgDriver) Binary() string { return "fake" }
 func (d *imgDriver) RunToolchain(context.Context, string, string, string, []string, []string, pipeline.Resource, func(string, string)) (int, error) {
 	return 0, nil
 }
-func (d *imgDriver) Build(_ context.Context, contextDir, dockerfile, _ string, _, _ []string, _ func(string, string)) (int, error) {
+func (d *imgDriver) Build(_ context.Context, contextDir, dockerfile, localTag string, _, _ []string, _ func(string, string)) (int, error) {
 	d.buildCalls++
 	d.gotContextDir = contextDir
 	d.gotDockerfile = dockerfile
+	d.gotLocalTag = localTag
 	return 0, nil
 }
-func (d *imgDriver) Tag(context.Context, string, string, func(string, string)) (int, error) {
+func (d *imgDriver) Tag(_ context.Context, _, dst string, _ func(string, string)) (int, error) {
+	d.gotTagDst = dst
 	return 0, nil
 }
 func (d *imgDriver) Login(context.Context, string, string, string, func(string, string)) (int, error) {
@@ -398,6 +402,61 @@ func TestStageExecutorBuildImageContextSubdir(t *testing.T) {
 	}
 	if !filepath.IsAbs(drv.gotDockerfile) {
 		t.Fatalf("context 非空时 dockerfile 应为绝对路径(避免被 driver 再 join),实际 %q", drv.gotDockerfile)
+	}
+}
+
+// TestStageExecutorBuildImageCustomName 验证 build_image 节点的 imageName 配置生效:
+// 本地构建名 = pipewright/<imageName>:<commit7>(此前恒为项目名,配置不生效)。
+func TestStageExecutorBuildImageCustomName(t *testing.T) {
+	drv := &imgDriver{}
+	b := newDAGTestBuilder(drv, &markerCloner{})
+	exec := NewStageExecutor(b, nil)
+	rep := &fakeReporter{}
+
+	stage := pipeline.Stage{ID: "s", Name: "构建", Kind: pipeline.KindBuild,
+		Jobs: []pipeline.Job{{Name: "镜像", Type: "build_image", Config: map[string]any{
+			"artifactType": "image", "buildModel": "dockerfile", "dockerfilePath": "Dockerfile",
+			"imageName": "org/app",
+		}}}}
+	if err := exec(context.Background(), &run.Run{ProjectID: "p1"}, stage, rep); err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	want := "pipewright/org/app:abc1234"
+	if drv.gotLocalTag != want {
+		t.Fatalf("本地镜像名应使用 imageName 配置,got %q want %q", drv.gotLocalTag, want)
+	}
+}
+
+// TestStageExecutorBuildImageCustomNamePush 验证 imageName 同样作用于推送:
+// 产物引用 = <registry-url>/<imageName>:<commit7>(此前恒为项目名)。
+func TestStageExecutorBuildImageCustomNamePush(t *testing.T) {
+	drv := &imgDriver{}
+	reg := &pipeline.ImageRegistry{Type: pipeline.RegistryHarbor, URL: "https://reg.example.com", CredentialID: ""}
+	b := &Builder{
+		projects: fakeProjects{proj: &project.Project{ID: "p1", RepoURL: "https://example.com/r.git"}},
+		settings: fakeSettings{settings: imageSettings(reg)},
+		vault:    fakeVault{secrets: map[string]string{}},
+		driver:   drv,
+		cloner:   &markerCloner{},
+	}
+	exec := NewStageExecutor(b, nil)
+	rep := &fakeReporter{}
+	r := &run.Run{ProjectID: "p1", Trigger: run.Trigger{ResolvedEnvironment: "prod"}}
+
+	stage := pipeline.Stage{ID: "s", Name: "构建", Kind: pipeline.KindBuild,
+		Jobs: []pipeline.Job{{Name: "镜像", Type: "build_image", Config: map[string]any{
+			"artifactType": "image", "buildModel": "dockerfile", "dockerfilePath": "Dockerfile",
+			"imageName": "org/app",
+		}}}}
+	if err := exec(context.Background(), r, stage, rep); err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	if len(rep.arts) != 1 {
+		t.Fatalf("应 emit 一件镜像产物,实际 %+v", rep.arts)
+	}
+	want := "reg.example.com/org/app:abc1234"
+	if rep.arts[0].Reference != want {
+		t.Fatalf("推送引用应使用 imageName 配置,got %q want %q", rep.arts[0].Reference, want)
 	}
 }
 
@@ -492,7 +551,7 @@ func TestScriptStepFromTemplatedJob(t *testing.T) {
 		"image": "node:{{ver}}", "ver": "20",
 		"commandTemplate": "cd {{dir}}\nnpm ci", "dir": "web",
 	}}
-	step, err := scriptStepFromJob(jb)
+	step, err := scriptStepFromJob(jb, nil)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -546,7 +605,7 @@ func TestRunDeployJobPassesImageParams(t *testing.T) {
 		"strategy":      "blue_green",
 		"deployPath":    "/opt/app", // 文件态键仍应透传,不互斥
 	}}
-	if err := b.runDeployJob(context.Background(), rep, jb, "run-1", nil); err != nil {
+	if err := b.runDeployJob(context.Background(), rep, jb, "run-1", nil, nil); err != nil {
 		t.Fatalf("runDeployJob err: %v", err)
 	}
 	for k, want := range map[string]string{
@@ -566,6 +625,54 @@ func TestRunDeployJobPassesImageParams(t *testing.T) {
 	// 空键不应混入(保持默认行为)。
 	if _, ok := dep.gotCfg["restartCommand"]; ok {
 		t.Errorf("空 restartCommand 不应入 cfg:%+v", dep.gotCfg)
+	}
+}
+
+// TestRunDeployJobCommitMeta 证 deployPath/restartCommand 与产物路径/构建缓存一致支持提交元数据
+// {{commit_*}},且运行参数优先于 config 同名键(运行期覆盖语义)。
+func TestRunDeployJobCommitMeta(t *testing.T) {
+	dep := &stubStageDeployer{}
+	b := &Builder{deployer: dep}
+	rep := &fakeReporter{}
+	jb := pipeline.Job{ID: "d", Name: "部署", Type: "deploy_ssh", Config: map[string]any{
+		"serverId":     "srv-1",
+		"port":         "config-port",
+		"deployPath":   "/opt/{{commit_sha}}/{{port}}",
+		"restartCommand": "systemctl restart app-{{commit_sha}}",
+	}}
+	resolved := &CloneResolved{CommitShort: "abc1234"}
+	params := map[string]string{"port": "8080"} // 运行参数覆盖 config 同名键
+	if err := b.runDeployJob(context.Background(), rep, jb, "run-1", params, resolved); err != nil {
+		t.Fatalf("runDeployJob err: %v", err)
+	}
+	if got, want := dep.gotCfg["releaseBase"], "/opt/abc1234/8080"; got != want {
+		t.Errorf("releaseBase = %q, want %q(完整 cfg=%+v)", got, want, dep.gotCfg)
+	}
+	if got, want := dep.gotCfg["restartCommand"], "systemctl restart app-abc1234"; got != want {
+		t.Errorf("restartCommand = %q, want %q", got, want)
+	}
+}
+
+// TestParseCacheConfigCommitMeta 证 buildcache 的 cachePaths/cacheKey 模板同样支持 {{commit_*}}。
+func TestParseCacheConfigCommitMeta(t *testing.T) {
+	jb := pipeline.Job{ID: "c", Name: "构建", Type: "script", Config: map[string]any{
+		"cachePaths": "node_modules/{{commit_sha}}",
+		"cacheKey":   "cache-{{commit_sha}}",
+	}}
+	cc := parseCacheConfig(jb, &CloneResolved{CommitShort: "abc1234"})
+	if !cc.enabled {
+		t.Fatal("cachePaths 非空应启用缓存")
+	}
+	if len(cc.paths) != 1 || cc.paths[0] != "node_modules/abc1234" {
+		t.Fatalf("cachePaths 应渲染 commit_sha,got %+v", cc.paths)
+	}
+	if cc.key != "cache-abc1234" {
+		t.Fatalf("cacheKey 应渲染 commit_sha,got %q", cc.key)
+	}
+	// resolved 为空 → 仅等价于 config 上下文,未知占位原样保留(向后兼容)。
+	cc2 := parseCacheConfig(jb, nil)
+	if cc2.key != "cache-{{commit_sha}}" {
+		t.Fatalf("resolved 为空时占位应原样保留,got %q", cc2.key)
 	}
 }
 

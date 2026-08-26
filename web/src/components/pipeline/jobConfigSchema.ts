@@ -329,6 +329,14 @@ export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
     fields: [
       { key: 'artifactType', get label() { return t('pipelineJob.fieldArtifactTypeBuildLabel') }, kind: 'select', options: ARTIFACT_OPTIONS },
       {
+        key: 'imageName',
+        get label() { return t('pipelineJob.fieldImageNameLabel') },
+        kind: 'text',
+        monospace: true,
+        placeholder: 'org/app',
+        get hint() { return t('pipelineJob.fieldImageNameHint') },
+      },
+      {
         key: 'buildModel',
         get label() { return t('pipelineJob.fieldBuildModelLabel') },
         kind: 'select',

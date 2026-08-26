@@ -77,6 +77,16 @@ func TestMirrorCloneCheckoutAndIncremental(t *testing.T) {
 	if res.CommitShort != mainShort {
 		t.Fatalf("CommitShort = %q, want %q", res.CommitShort, mainShort)
 	}
+	// commit 元数据(作者 / 备注 / 时间)应从镜像 HEAD 完整解析,供 env / 占位符 / {{}} 上下文使用。
+	if res.Author == "" {
+		t.Fatalf("Author 未提取(mirror 路径 CommitMeta 解析缺失)")
+	}
+	if res.Message != "c1" {
+		t.Fatalf("Message = %q, want %q", res.Message, "c1")
+	}
+	if res.Time.IsZero() {
+		t.Fatalf("Time 未提取(mirror 路径 CommitMeta 解析缺失)")
+	}
 	if _, err := os.Stat(filepath.Join(ws1, "README.md")); err != nil {
 		t.Fatalf("工作区应含 README.md: %v", err)
 	}

@@ -93,8 +93,9 @@ export default {
   typePushImageDesc: '推送映像到容器倉庫',
   fieldRegistryLabel: '映像倉庫位址',
   fieldImageNameLabel: '映像名',
+  fieldImageNameHint: '可選,映像名(如 org/app);留空則預設以專案名作為映像名',
   fieldTagLabel: '標籤',
-  fieldTagHint: '可用變數:{\'${COMMIT_SHA}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
+  fieldTagHint: '可用變數:{\'${COMMIT_SHA}\'} {\'${COMMIT_AUTHOR}\'} {\'${COMMIT_MESSAGE}\'} {\'${COMMIT_TIME}\'} {\'${BRANCH}\'} {\'${BUILD_NUMBER}\'}',
   fieldRegistryCredentialLabel: '倉庫憑證',
   fieldRegistryCredentialHint: '引用映像倉庫登入憑證',
 
@@ -136,7 +137,7 @@ export default {
   fieldParamsLabel: '參數表',
   fieldParamsHint: '每行一條 key=value,完全自由;命令範本/產物路徑裡用 {\'{{key}}\'} 引用',
   fieldCommandTemplateLabel: '命令範本',
-  fieldCommandTemplateHint: '多行;{\'{{參數}}\'} 會被參數表的值取代,$ENV 仍交給容器內 shell',
+  fieldCommandTemplateHint: '多行;{\'{{參數}}\'} 會被參數表的值取代;另支援 {\'{{commit_sha}}\'} {\'{{commit_author}}\'} {\'{{commit_message}}\'} {\'{{commit_time}}\'},$ENV 仍交給容器內 shell',
   fieldTemplatedArtifactPathHint: '可選,每行一條,支援 {\'{{參數}}\'} 與萬用字元;目錄→dist、*.jar→jar、其它→archive',
   fieldTemplatedWorkDirHint: '可選,相對複製工作區根',
   fieldTemplatedCachePathsHint:
