@@ -196,7 +196,7 @@ export default {
   placeholderVar: '变量',
   addTemplate: '新增模板',
   availableVars: '可用变量',
-  commitVarsHint: '提交信息占位(仓库可解析出 HEAD 时可用): {{commitAuthor}} 提交作者 · {{commitMessage}} 提交备注 · {{commitTime}} 提交时间(如 2026-08-26 15:32:02)',
+  commitVarsHint: "提交信息占位(仓库可解析出 HEAD 时可用): {'{{commitAuthor}}'} 提交作者 · {'{{commitMessage}}'} 提交备注 · {'{{commitTime}}'} 提交时间(如 2026-08-26 15:32:02)",
 
   tplEvent: '事件',
   tplChannel: '渠道(可选)',

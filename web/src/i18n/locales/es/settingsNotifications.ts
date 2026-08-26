@@ -189,7 +189,7 @@ export default {
   placeholderVar: 'variable',
   addTemplate: 'Añadir plantilla',
   availableVars: 'Variables disponibles',
-  commitVarsHint: 'Marcadores de commit (cuando el HEAD del repositorio se puede resolver): {{commitAuthor}} autor · {{commitMessage}} mensaje · {{commitTime}} fecha del commit (p. ej. 2026-08-26 15:32:02)',
+  commitVarsHint: "Marcadores de commit (cuando el HEAD del repositorio se puede resolver): {'{{commitAuthor}}'} autor · {'{{commitMessage}}'} mensaje · {'{{commitTime}}'} fecha del commit (p. ej. 2026-08-26 15:32:02)",
 
   tplEvent: 'Evento',
   tplChannel: 'Canal (opcional)',

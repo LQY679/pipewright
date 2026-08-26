@@ -188,7 +188,7 @@ export default {
   placeholderVar: '變數',
   addTemplate: '新增範本',
   availableVars: '可用變數',
-  commitVarsHint: '提交資訊佔位(倉庫可解析出 HEAD 時可用): {{commitAuthor}} 提交作者 · {{commitMessage}} 提交備註 · {{commitTime}} 提交時間(如 2026-08-26 15:32:02)',
+  commitVarsHint: "提交資訊佔位(倉庫可解析出 HEAD 時可用): {'{{commitAuthor}}'} 提交作者 · {'{{commitMessage}}'} 提交備註 · {'{{commitTime}}'} 提交時間(如 2026-08-26 15:32:02)",
 
   tplEvent: '事件',
   tplChannel: '管道(選填)',

@@ -189,7 +189,7 @@ export default {
   placeholderVar: '변수',
   addTemplate: '템플릿 추가',
   availableVars: '사용 가능한 변수',
-  commitVarsHint: '커밋 정보 자리표시자(저장소 HEAD를 확인할 수 있는 경우): {{commitAuthor}} 커밋 작성자 · {{commitMessage}} 커밋 메시지 · {{commitTime}} 커밋 시간(예 2026-08-26 15:32:02)',
+  commitVarsHint: "커밋 정보 자리표시자(저장소 HEAD를 확인할 수 있는 경우): {'{{commitAuthor}}'} 커밋 작성자 · {'{{commitMessage}}'} 커밋 메시지 · {'{{commitTime}}'} 커밋 시간(예 2026-08-26 15:32:02)",
 
   tplEvent: '이벤트',
   tplChannel: '채널(선택)',

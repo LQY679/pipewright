@@ -189,7 +189,7 @@ export default {
   placeholderVar: '変数',
   addTemplate: 'テンプレートを追加',
   availableVars: '利用可能な変数',
-  commitVarsHint: 'コミット情報のプレースホルダー(リポジトリの HEAD を解決できる場合): {{commitAuthor}} コミット作者 · {{commitMessage}} コミットメッセージ · {{commitTime}} コミット時刻(例 2026-08-26 15:32:02)',
+  commitVarsHint: "コミット情報のプレースホルダー(リポジトリの HEAD を解決できる場合): {'{{commitAuthor}}'} コミット作者 · {'{{commitMessage}}'} コミットメッセージ · {'{{commitTime}}'} コミット時刻(例 2026-08-26 15:32:02)",
 
   tplEvent: 'イベント',
   tplChannel: 'チャンネル（任意）',

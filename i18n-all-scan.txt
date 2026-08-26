@@ -1,0 +1,7 @@
+[zh-TW] commitVarsHint (code=9): "提交資訊佔位(倉庫可解析出 HEAD 時可用): {{commitAuthor}} 提交作者 · {{commitMessage}} 提交備註 · {{commitTime}} 提交時間(如 2026-08-26 15:32:02)"
+[en] commitVarsHint (code=9): "Commit placeholders (when the repo HEAD can be resolved): {{commitAuthor}} author · {{commitMessage}} commit message · {{commitTime}} commit time (e.g. 2026-08
+[ja] commitVarsHint (code=9): "コミット情報のプレースホルダー(リポジトリの HEAD を解決できる場合): {{commitAuthor}} コミット作者 · {{commitMessage}} コミットメッセージ · {{commitTime}} コミット時刻(例 2026-08-26 15:32:02)"
+[ko] commitVarsHint (code=9): "커밋 정보 자리표시자(저장소 HEAD를 확인할 수 있는 경우): {{commitAuthor}} 커밋 작성자 · {{commitMessage}} 커밋 메시지 · {{commitTime}} 커밋 시간(예 2026-08-26 15:32:02)"
+[es] commitVarsHint (code=9): "Marcadores de commit (cuando el HEAD del repositorio se puede resolver): {{commitAuthor}} autor · {{commitMessage}} mensaje · {{commitTime}} fecha del commit (
+[fr] commitVarsHint (code=9): "Espaces réservés du commit (lorsque le HEAD du dépôt peut être résolu) : {{commitAuthor}} auteur · {{commitMessage}} message · {{commitTime}} date du commit (e
+[de] commitVarsHint (code=9): "Commit-Platzhalter (wenn das Repository-HEAD aufgelöst werden kann): {{commitAuthor}} Autor · {{commitMessage}} Nachricht · {{commitTime}} Zeitpunkt (z. B. 202
