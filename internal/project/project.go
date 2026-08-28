@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/huangchengsir/pipewright/internal/gitrefresh"
 	"github.com/huangchengsir/pipewright/internal/store"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
@@ -133,9 +134,20 @@ type Service interface {
 
 // service 是 store + vault 支撑的 Service 实现。
 type service struct {
-	db     *sql.DB
-	vault  vault.Vault
-	prober RemoteProber
+	db        *sql.DB
+	vault     vault.Vault
+	prober    RemoteProber
+	refresher gitrefresh.Refresher
+}
+
+// Option 配置 New 构造的 Service。
+type Option func(*service)
+
+// WithGitRefresher 注入 OAuth access_token 静默续期器:探测前若凭据存有 refresh_token
+// 且 access_token 已过期,先静默换新 token 再 ls-remote,避免凭据过期导致项目保存失败。
+// nil 时跳过刷新(向后兼容)。
+func WithGitRefresher(r gitrefresh.Refresher) Option {
+	return func(s *service) { s.refresher = r }
 }
 
 // New 构造 Service。
@@ -144,11 +156,17 @@ type service struct {
 //   - prober:远端探测器;为 nil 时使用默认 go-git ListRemote 实现。
 //
 // 不在此做任何重活(无 init() 副作用,避免抬高空载内存)。
-func New(db *sql.DB, v vault.Vault, prober RemoteProber) Service {
+func New(db *sql.DB, v vault.Vault, prober RemoteProber, opts ...Option) Service {
 	if prober == nil {
 		prober = goGitProber{}
 	}
-	return &service{db: db, vault: v, prober: prober}
+	s := &service{db: db, vault: v, prober: prober}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
+	}
+	return s
 }
 
 // validateCreate 校验创建入参的必填项。
@@ -171,7 +189,7 @@ func (s *service) probe(ctx context.Context, repoURL, credentialID string) (stri
 	if s.vault == nil {
 		return "", ErrVaultUnconfigured
 	}
-	auth, err := s.vault.GetGitAuth(credentialID)
+	auth, err := gitrefresh.Resolve(ctx, s.vault, s.refresher, credentialID)
 	if err != nil {
 		switch {
 		case errors.Is(err, vault.ErrVaultUnconfigured):

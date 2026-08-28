@@ -51,11 +51,15 @@ type SaveAppInput struct {
 	Enabled      bool
 }
 
-// TokenResult 是 Exchange 的产出:access_token + 解析出的登录名。
-// access_token 仅供调用方立即经 vault.Create 存成凭据,绝不回显/日志。
+// TokenResult 是 Exchange / RefreshAccessToken 的产出:access_token + 解析出的登录名 + refresh_token。
+// access_token / refresh_token 仅供调用方立即经 vault.Create 存成凭据,绝不回显/日志。
+// refresh_token 仅 OAuth 授权码兑换时返回(Gitee 等);换取新 token 时同样可能携带(续期后一并落库)。
+// ExpiresIn 是平台返回的 access_token 有效期(秒);0 = 未提供(调用方可视为未知)。
 type TokenResult struct {
-	AccessToken string
-	Login       string
+	AccessToken  string
+	Login        string
+	RefreshToken string
+	ExpiresIn    int64
 }
 
 // Service 定义 OAuth 领域对外接口。
@@ -71,6 +75,10 @@ type Service interface {
 	// Exchange 用 code 经 provider tokenURL 换 access_token(server-to-server,注入 http.Client),
 	// 再用 token 拉 userURL 取登录名。client_secret 绝不出现在错误/日志/响应。
 	Exchange(ctx context.Context, provider, code, redirectURI string) (*TokenResult, error)
+	// RefreshAccessToken 用 refresh_token 静默换取新 access_token(及可能轮换的新 refresh_token),
+	// 供 access_token 过期时后端续期,无需用户重新授权。失败返回 ErrExchangeFailed(人读,无 secret/token)。
+	// provider 未配置/未启用 → ErrAppNotConfigured。
+	RefreshAccessToken(ctx context.Context, provider, refreshToken string) (*TokenResult, error)
 	// IssueState 生成绑定 sessionID 的随机 state(CSRF;放进 authorize URL)。
 	IssueState(sessionID string) (string, error)
 	// ConsumeState 校验并一次性消费 callback 带回的 state(存在+未过期+绑定会话匹配)。
@@ -246,7 +254,7 @@ func (s *service) Exchange(ctx context.Context, provider, code, redirectURI stri
 		return nil, err
 	}
 
-	accessToken, err := s.requestToken(ctx, endpoints, clientID, secret, code, redirectURI)
+	accessToken, refreshToken, expiresIn, err := s.requestToken(ctx, endpoints, clientID, secret, code, redirectURI)
 	// 明文 secret 用完即弃。
 	secret = ""
 	if err != nil {
@@ -257,11 +265,44 @@ func (s *service) Exchange(ctx context.Context, provider, code, redirectURI stri
 	if err != nil {
 		return nil, err
 	}
-	return &TokenResult{AccessToken: accessToken, Login: login}, nil
+	return &TokenResult{AccessToken: accessToken, Login: login, RefreshToken: refreshToken, ExpiresIn: expiresIn}, nil
 }
 
-// requestToken POST code→token 到 provider tokenURL,取回 access_token(绝不日志 secret/token)。
-func (s *service) requestToken(ctx context.Context, p Provider, clientID, clientSecret, code, redirectURI string) (string, error) {
+// RefreshAccessToken 用 refresh_token 静默换取新 access_token(及可能轮换的新 refresh_token)。
+// 供 access_token 过期时后端续期,无需用户重新授权。仅 OAuth 凭据(存过 refresh_token)适用。
+func (s *service) RefreshAccessToken(ctx context.Context, provider, refreshToken string) (*TokenResult, error) {
+	prov, clientID, sealed, baseURL, _, _, err := s.loadApp(ctx, provider)
+	if err != nil {
+		return nil, err
+	}
+	if clientID == "" || len(sealed) == 0 {
+		return nil, ErrAppNotConfigured
+	}
+	if strings.TrimSpace(refreshToken) == "" {
+		return nil, ErrExchangeFailed
+	}
+	endpoints, err := resolveProvider(prov, baseURL)
+	if err != nil {
+		return nil, err
+	}
+
+	secret, err := s.openSecret(sealed)
+	if err != nil {
+		return nil, err
+	}
+
+	accessToken, newRefresh, expiresIn, err := s.requestRefresh(ctx, endpoints, clientID, secret, refreshToken)
+	// 明文 secret 用完即弃。
+	secret = ""
+	if err != nil {
+		return nil, err
+	}
+	return &TokenResult{AccessToken: accessToken, RefreshToken: newRefresh, ExpiresIn: expiresIn}, nil
+}
+
+// requestToken POST code→token 到 provider tokenURL,取回 access_token(及 Gitee 等附带的
+// refresh_token / expires_in,绝不日志 secret/token)。
+func (s *service) requestToken(ctx context.Context, p Provider, clientID, clientSecret, code, redirectURI string) (string, string, int64, error) {
 	form := url.Values{}
 	form.Set("client_id", clientID)
 	form.Set("client_secret", clientSecret)
@@ -271,7 +312,7 @@ func (s *service) requestToken(ctx context.Context, p Provider, clientID, client
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.TokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
-		return "", ErrExchangeFailed
+		return "", "", 0, ErrExchangeFailed
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	// GitHub 默认回表单编码,显式要 JSON;其余平台本就回 JSON,加这头无害。
@@ -279,26 +320,67 @@ func (s *service) requestToken(ctx context.Context, p Provider, clientID, client
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return "", ErrExchangeFailed
+		return "", "", 0, ErrExchangeFailed
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", ErrExchangeFailed
+		return "", "", 0, ErrExchangeFailed
 	}
 
 	var parsed struct {
-		AccessToken string `json:"access_token"`
-		Error       string `json:"error"`
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    int64  `json:"expires_in"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return "", ErrExchangeFailed
+		return "", "", 0, ErrExchangeFailed
 	}
 	if parsed.AccessToken == "" {
 		// 兑换失败(如 code 失效):人读错误,绝不回 provider 原文(可能含敏感细节)。
-		return "", ErrExchangeFailed
+		return "", "", 0, ErrExchangeFailed
 	}
-	return parsed.AccessToken, nil
+	return parsed.AccessToken, parsed.RefreshToken, parsed.ExpiresIn, nil
+}
+
+// requestRefresh POST refresh_token→token 到 provider tokenURL,换取新 access_token
+// (及可能轮换的新 refresh_token 与 expires_in,绝不日志 secret/token)。
+func (s *service) requestRefresh(ctx context.Context, p Provider, clientID, clientSecret, refreshToken string) (string, string, int64, error) {
+	form := url.Values{}
+	form.Set("client_id", clientID)
+	form.Set("client_secret", clientSecret)
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", refreshToken)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.TokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", "", 0, ErrExchangeFailed
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return "", "", 0, ErrExchangeFailed
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", "", 0, ErrExchangeFailed
+	}
+
+	var parsed struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    int64  `json:"expires_in"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return "", "", 0, ErrExchangeFailed
+	}
+	if parsed.AccessToken == "" {
+		return "", "", 0, ErrExchangeFailed
+	}
+	return parsed.AccessToken, parsed.RefreshToken, parsed.ExpiresIn, nil
 }
 
 // requestUser 用 access_token 拉 userURL 取登录名(绝不日志 token)。

@@ -5,6 +5,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/huangchengsir/pipewright/internal/gitrefresh"
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/prstatus"
 	"github.com/huangchengsir/pipewright/internal/run"
@@ -27,6 +28,7 @@ func NewPRStatusHook(
 	runs run.Service,
 	projects project.Service,
 	v vault.Vault,
+	refresher gitrefresh.Refresher,
 	reporter *prstatus.Reporter,
 	publicBaseURL string,
 	globalOverride bool,
@@ -53,7 +55,7 @@ func NewPRStatusHook(
 		if !ok {
 			return // 不支持的代码平台
 		}
-		token := revealPRToken(v, proj.CredentialID)
+		token := revealPRToken(ctx, v, refresher, proj.CredentialID)
 		if token == "" {
 			return // 无可用凭据
 		}
@@ -73,15 +75,16 @@ func NewPRStatusHook(
 }
 
 // revealPRToken 取项目凭据明文(失败/未配 → 空,best-effort)。
-func revealPRToken(v vault.Vault, credID string) string {
+// OAuth 凭据过期时先经 refresher 静默续期,再取最新 access_token。
+func revealPRToken(ctx context.Context, v vault.Vault, r gitrefresh.Refresher, credID string) string {
 	if v == nil || strings.TrimSpace(credID) == "" {
 		return ""
 	}
-	tok, err := v.Reveal(credID)
+	auth, err := gitrefresh.Resolve(ctx, v, r, credID)
 	if err != nil {
 		return ""
 	}
-	return tok
+	return auth.Token
 }
 
 func prDescription(finalStatus string) string {

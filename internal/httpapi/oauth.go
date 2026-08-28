@@ -196,12 +196,20 @@ func makeOAuthCallbackHandler(svc oauth.Service, v vaultCreator) http.HandlerFun
 			redirectVaultError(w, r, provider, "vault_unavailable")
 			return
 		}
-		// 把 access_token 存成 git_token 凭据(name = {provider}:{login})。token 绝不回显/日志。
+		// 把 access_token 存成 git_token 凭据(name = {provider}:{login}),并一并保存
+		// OAuth 响应携带的 refresh_token(仅 Gitee 等平台)与换算的过期时间,
+		// 供 access_token 过期时后端静默续期(过期/临期才刷新)。token 绝不回显/日志。
+		expiresAt := ""
+		if res.ExpiresIn > 0 {
+			expiresAt = time.Now().Add(time.Duration(res.ExpiresIn) * time.Second).UTC().Format(time.RFC3339)
+		}
 		_, cerr := v.Create(vault.CreateInput{
-			Name:   provider + ":" + res.Login,
-			Type:   vault.TypeGitToken,
-			Scope:  "global",
-			Secret: res.AccessToken,
+			Name:         provider + ":" + res.Login,
+			Type:         vault.TypeGitToken,
+			Scope:        "global",
+			Secret:       res.AccessToken,
+			RefreshToken: res.RefreshToken,
+			ExpiresAt:    expiresAt,
 		})
 		if cerr != nil {
 			if errors.Is(cerr, vault.ErrVaultUnconfigured) {

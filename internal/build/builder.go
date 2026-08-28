@@ -11,6 +11,7 @@ import (
 
 	"github.com/huangchengsir/pipewright/internal/artifactstore"
 	"github.com/huangchengsir/pipewright/internal/deploy"
+	"github.com/huangchengsir/pipewright/internal/gitrefresh"
 	"github.com/huangchengsir/pipewright/internal/notify"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/project"
@@ -74,6 +75,9 @@ type Builder struct {
 	// git_source 节点显式绑定的 credentialId(用户在源节点 UI 配置的凭据);节点未配置/读取失败
 	// 回退项目级凭据(旧行为)。由 main 注入 pipelineSvc。
 	pipelines pipeline.Service
+	// refresher 是 OAuth access_token 静默续期器:克隆取 token 前先尝试用保存的 refresh_token
+	// 换新 token(凭据过期不再导致构建克隆失败)。nil 则跳过(向后兼容)。由 main 注入(WithGitRefresher)。
+	refresher gitrefresh.Refresher
 }
 
 // buildCacheStore 抽象「按 key 恢复/保存工作区缓存路径」的能力(便于 fake 单测注入)。
@@ -131,6 +135,13 @@ func WithImageGC(enabled bool) BuilderOption {
 // (触发未指定 commit 时尤其有用)。
 func WithCommitRecorder(fn func(ctx context.Context, runID string, meta run.CommitMeta)) BuilderOption {
 	return func(b *Builder) { b.recordCommit = fn }
+}
+
+// WithGitRefresher 注入 OAuth access_token 静默续期器:克隆取 token 前若凭据存有 refresh_token
+// 且 access_token 已过期,先静默换新 token 再克隆,避免凭据过期导致构建失败。
+// nil 跳过(向后兼容)。
+func WithGitRefresher(r gitrefresh.Refresher) BuilderOption {
+	return func(b *Builder) { b.refresher = r }
 }
 
 // commitMetaOf 把克隆解析结果收敛为 run.CommitMeta(供 recordCommit 回写持久化)。
@@ -264,7 +275,7 @@ func (b *Builder) Run(ctx context.Context, r *run.Run, sink run.StepSink) error 
 	}
 	defer func() { _ = os.RemoveAll(workspace) }() // 宿主零污染
 
-	auth := b.revealGitAuth(proj.CredentialID)
+	auth := b.revealGitAuth(ctx, proj.CredentialID)
 	resolved, cerr := b.cloner.Clone(ctx, proj.RepoURL, auth.Username, auth.Token, r.Trigger.Branch, r.Trigger.Commit, workspace)
 	auth = vault.GitAuth{}
 	if cerr != nil {
@@ -561,11 +572,12 @@ func (b *Builder) revealToken(credID string) string {
 	return pt
 }
 
-func (b *Builder) revealGitAuth(credID string) vault.GitAuth {
+func (b *Builder) revealGitAuth(ctx context.Context, credID string) vault.GitAuth {
 	if credID == "" || b.vault == nil {
 		return vault.GitAuth{}
 	}
-	auth, err := b.vault.GetGitAuth(credID)
+	// 取 token 前先尝试静默续期(OAuth 凭据存有 refresh_token 且 access_token 已过期时换新 token)。
+	auth, err := gitrefresh.Resolve(ctx, b.vault, b.refresher, credID)
 	if err != nil {
 		return vault.GitAuth{}
 	}
@@ -591,7 +603,7 @@ func (b *Builder) resolveCloneAuth(ctx context.Context, r *run.Run, proj *projec
 			}
 		}
 	}
-	return b.revealGitAuth(credID)
+	return b.revealGitAuth(ctx, credID)
 }
 
 // revealRegistryCred 取仓库凭据明文并解析为 user/password。凭据约定以 "user:password" 存储;

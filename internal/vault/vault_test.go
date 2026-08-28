@@ -2,8 +2,10 @@ package vault
 
 import (
 	"database/sql"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/huangchengsir/pipewright/internal/storetest"
 )
@@ -92,6 +94,161 @@ func TestUnconfiguredVault(t *testing.T) {
 	}
 	if err := v.Delete("x"); err != ErrVaultUnconfigured {
 		t.Fatalf("Delete err = %v, want ErrVaultUnconfigured", err)
+	}
+	if _, _, err := v.RefreshContext("x"); err != ErrVaultUnconfigured {
+		t.Fatalf("RefreshContext err = %v, want ErrVaultUnconfigured", err)
+	}
+	if err := v.RotateAccessToken("x", "new", "", ""); err != ErrVaultUnconfigured {
+		t.Fatalf("RotateAccessToken err = %v, want ErrVaultUnconfigured", err)
+	}
+}
+
+// TestRefreshContextRoundTrip 验证 OAuth 凭据保存 refresh_token 后可解密回读,
+// 手动凭据(未附 refresh_token)返回空刷新上下文(非错误)。
+func TestRefreshContextRoundTrip(t *testing.T) {
+	v := New(testDB(t), testKey())
+	cred, err := v.Create(CreateInput{
+		Name: "gitee:octocat", Type: TypeGitToken, Scope: "global",
+		Secret: "at_123", RefreshToken: "rt_secret_456",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	provider, rt, err := v.RefreshContext(cred.ID)
+	if err != nil {
+		t.Fatalf("RefreshContext: %v", err)
+	}
+	if provider != "gitee" || rt != "rt_secret_456" {
+		t.Fatalf("refresh context: provider=%q rt=%q", provider, rt)
+	}
+
+	manual, _ := v.Create(CreateInput{Name: "manual", Type: TypeGitToken, Secret: "tok"})
+	p2, rt2, err := v.RefreshContext(manual.ID)
+	if err != nil || p2 != "" || rt2 != "" {
+		t.Fatalf("manual refresh context should be empty: p=%q rt=%q err=%v", p2, rt2, err)
+	}
+	if _, _, err := v.RefreshContext("nope"); err != ErrNotFound {
+		t.Fatalf("missing credential err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestRefreshContextProviderFromName 验证 provider 由凭据名前缀推导("provider:login")。
+func TestRefreshContextProviderFromName(t *testing.T) {
+	if got := oauthProviderFromName("gitee:octocat"); got != "gitee" {
+		t.Fatalf("gitee prefix = %q", got)
+	}
+	if got := oauthProviderFromName("github:octocat"); got != "github" {
+		t.Fatalf("github prefix = %q", got)
+	}
+	if got := oauthProviderFromName("custom:git.internal/foo"); got != "custom" {
+		t.Fatalf("custom prefix = %q", got)
+	}
+	if got := oauthProviderFromName("manual token"); got != "" {
+		t.Fatalf("no-colon name should yield empty provider, got %q", got)
+	}
+	if got := oauthProviderFromName(":leading-colon"); got != "" {
+		t.Fatalf("leading-colon name should yield empty provider, got %q", got)
+	}
+}
+
+// TestRotateAccessToken 验证续期后 access_token 与 refresh_token 双双轮换落库。
+func TestRotateAccessToken(t *testing.T) {
+	v := New(testDB(t), testKey())
+	cred, _ := v.Create(CreateInput{
+		Name: "gitee:octocat", Type: TypeGitToken, Scope: "global",
+		Secret: "gho_at_old_123456789", RefreshToken: "rt_old", ExpiresAt: "2030-01-01T00:00:00Z",
+	})
+	newToken := "gho_at_rotated_new_987654321"
+	if err := v.RotateAccessToken(cred.ID, newToken, "rt_new", ""); err != nil {
+		t.Fatalf("RotateAccessToken: %v", err)
+	}
+	// 轮换未给新过期时间:既有 expires_at 保留(不清空判断依据)。
+	if exp, _ := v.AccessExpiry(cred.ID); exp == nil || !exp.Equal(time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("expiry after rotate(no new value) = %v, want 2030-01-01 preserved", exp)
+	}
+	// 轮换带新过期时间:覆盖更新(access_token 不变,仅验证 expires_at 生效)。
+	if err := v.RotateAccessToken(cred.ID, newToken, "rt_new", "2031-02-02T00:00:00Z"); err != nil {
+		t.Fatalf("RotateAccessToken with new expiry: %v", err)
+	}
+	if exp, _ := v.AccessExpiry(cred.ID); exp == nil || !exp.Equal(time.Date(2031, 2, 2, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("expiry after rotate(new value) = %v, want 2031-02-02", exp)
+	}
+	got, err := v.Reveal(cred.ID)
+	if err != nil || got != newToken {
+		t.Fatalf("reveal after rotate = %q err=%v", got, err)
+	}
+	_, rt, err := v.RefreshContext(cred.ID)
+	if err != nil || rt != "rt_new" {
+		t.Fatalf("refresh context after rotate = %q err=%v", rt, err)
+	}
+	// masked_value 同步更新(以新 token 末 4 位判定)。
+	list, _ := v.List()
+	if len(list) != 1 || !strings.HasSuffix(list[0].MaskedValue, "4321") {
+		t.Fatalf("masked value not rotated: %+v", list)
+	}
+	// 空 access_token 拒绝轮换。
+	if err := v.RotateAccessToken(cred.ID, "  ", "", ""); err != ErrEmptySecret {
+		t.Fatalf("empty access token err = %v, want ErrEmptySecret", err)
+	}
+
+	// 刷新响应未携带新 refresh_token:既有 refresh_token 应保留,不能清空续期能力。
+	if err := v.RotateAccessToken(cred.ID, "gho_at_rotated_no_rt", "", ""); err != nil {
+		t.Fatalf("rotate without refresh_token: %v", err)
+	}
+	_, rt, err = v.RefreshContext(cred.ID)
+	if err != nil || rt != "rt_new" {
+		t.Fatalf("refresh token should be kept when response omits it, got %q err=%v", rt, err)
+	}
+}
+
+// TestAccessExpiry 验证 access_token 过期时间(expires_at)的读回语义:
+// 未配置/不存在/未知(nil)三种边界各归其位,供 gitrefresh 判断「过期/临期才刷新」。
+func TestAccessExpiry(t *testing.T) {
+	v := New(testDB(t), testKey())
+	// 未知:创建未附 ExpiresAt → nil(存量凭据/手动创建),按「首次使用刷新并补记」处理。
+	cred, _ := v.Create(CreateInput{Name: "gitee:octocat", Type: TypeGitToken, Secret: "at", RefreshToken: "rt"})
+	if exp, err := v.AccessExpiry(cred.ID); err != nil || exp != nil {
+		t.Fatalf("unknown expiry = %v err=%v, want nil", exp, err)
+	}
+	// 已知:创建带 ExpiresAt → 可读回原始值。
+	cred2, _ := v.Create(CreateInput{Name: "gitee:bot", Type: TypeGitToken, Secret: "at2", ExpiresAt: "2030-06-15T08:30:00Z"})
+	exp2, err := v.AccessExpiry(cred2.ID)
+	want := time.Date(2030, 6, 15, 8, 30, 0, 0, time.UTC)
+	if err != nil || exp2 == nil || !exp2.Equal(want) {
+		t.Fatalf("expiry = %v err=%v, want %v", exp2, err, want)
+	}
+	// 不存在 → ErrNotFound。
+	if _, err := v.AccessExpiry("missing-id"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing err = %v, want ErrNotFound", err)
+	}
+	// 未配置 master key → ErrVaultUnconfigured。
+	uv := New(testDB(t), nil)
+	if _, err := uv.AccessExpiry(cred.ID); err != ErrVaultUnconfigured {
+		t.Fatalf("unconfigured err = %v, want ErrVaultUnconfigured", err)
+	}
+}
+
+// TestUpdateRotateClearsRefreshToken 验证手动轮换 secret 时旧 refresh_token 一并失效清空,
+// 防止续期拿到旧凭据的刷新上下文。
+func TestUpdateRotateClearsRefreshToken(t *testing.T) {
+	v := New(testDB(t), testKey())
+	cred, _ := v.Create(CreateInput{
+		Name: "gitee:octocat", Type: TypeGitToken, Secret: "at_old", RefreshToken: "rt_old",
+	})
+	newSecret := "at_manually_rotated"
+	if _, err := v.Update(cred.ID, UpdateInput{Secret: &newSecret}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	_, rt, err := v.RefreshContext(cred.ID)
+	if err != nil {
+		t.Fatalf("RefreshContext: %v", err)
+	}
+	if rt != "" {
+		t.Fatalf("manual rotation should clear refresh_token, got %q", rt)
+	}
+	got, _ := v.Reveal(cred.ID)
+	if got != newSecret {
+		t.Fatalf("secret after rotate = %q", got)
 	}
 }
 

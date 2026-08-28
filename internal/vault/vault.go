@@ -63,6 +63,12 @@ type CreateInput struct {
 	Scope    string
 	Username string
 	Secret   string
+	// RefreshToken 是 OAuth 授权码兑换时附带的 refresh_token(仅 Gitee 等平台),
+	// 加密存 refresh_token_ciphertext 列,供 access_token 过期时后端静默续期。手动创建留空。
+	RefreshToken string
+	// ExpiresAt 是 access_token 的过期时间(RFC3339 UTC),由 OAuth 响应的 expires_in 换算。
+	// 空 = 未知(存量凭据/手动创建),续期逻辑按「首次使用刷新一次并补记」处理。
+	ExpiresAt string
 }
 
 // UpdateInput 是更新凭据的入参;指针字段为 nil 表示不修改。
@@ -106,6 +112,20 @@ type Vault interface {
 	// OpenSecret 解密 SealSecret 产出的密文 BLOB;认证失败返回 ErrDecrypt(不泄漏细节)。
 	// 未配置 master key 时返回 ErrVaultUnconfigured。
 	OpenSecret(sealed []byte) ([]byte, error)
+	// RefreshContext 返回 OAuth 凭据的刷新上下文:provider 由凭据名前缀("provider:login")推导,
+	// refreshToken 为解密后的 refresh_token(无则空串)。供 access_token 过期时静默续期;
+	// 手动创建的凭据(无 refresh_token)返回 ("", "", nil)。未配置 master key → ErrVaultUnconfigured;
+	// 不存在 → ErrNotFound。
+	RefreshContext(id string) (provider, refreshToken string, err error)
+	// AccessExpiry 返回 OAuth access_token 的过期时间(由 expires_in 换算并落库)。
+	// nil = 未知(存量凭据或平台未返回 expires_in):续期逻辑按「首次使用刷新一次并补记」处理。
+	// 未配置 master key → ErrVaultUnconfigured;不存在 → ErrNotFound。
+	AccessExpiry(id string) (*time.Time, error)
+	// RotateAccessToken 轮换 OAuth access_token(及可选的新 refresh_token / 新过期时间)落库:
+	// 重加密 ciphertext / refresh_token_ciphertext / masked_value 并更新 updated_at;不改 name/scope/username。
+	// 供续期成功后写入新 token。expiresAt 为空(RFC3339 UTC)时保留既有过期时间。
+	// 空 accessToken → ErrEmptySecret。
+	RotateAccessToken(id string, accessToken, refreshToken, expiresAt string) error
 }
 
 // service 是 store 支撑的 Vault 实现。master key 为 nil 时为「未配置」态。
@@ -151,16 +171,27 @@ func (s *service) Create(in CreateInput) (*Credential, error) {
 	if err != nil {
 		return nil, err
 	}
+	var sealedRefresh []byte
+	if rt := strings.TrimSpace(in.RefreshToken); rt != "" {
+		sealedRefresh, err = seal(s.key, []byte(rt))
+		if err != nil {
+			return nil, err
+		}
+	}
 	masked := mask(in.Type, in.Secret)
 
 	id := uuid.NewString()
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339)
 
+	var expiresAt any
+	if in.ExpiresAt != "" {
+		expiresAt = in.ExpiresAt
+	}
 	_, err = s.db.Exec(
-		`INSERT INTO credentials (id, name, type, scope, username, ciphertext, masked_value, last_used_at, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
-		id, in.Name, in.Type, in.Scope, strings.TrimSpace(in.Username), sealed, masked, nowStr, nowStr,
+		`INSERT INTO credentials (id, name, type, scope, username, ciphertext, refresh_token_ciphertext, masked_value, last_used_at, created_at, updated_at, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
+		id, in.Name, in.Type, in.Scope, strings.TrimSpace(in.Username), sealed, sealedRefresh, masked, nowStr, nowStr, expiresAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("vault: insert credential: %w", err)
@@ -330,8 +361,9 @@ func (s *service) Update(id string, in UpdateInput) (*Credential, error) {
 
 	nowStr := time.Now().UTC().Format(time.RFC3339)
 	if rotate {
+		// 轮换 secret 视为密钥更换:旧 refresh_token 一并失效清空(防续期拿到旧凭据的上下文)。
 		_, err = s.db.Exec(
-			`UPDATE credentials SET name = ?, scope = ?, username = ?, ciphertext = ?, masked_value = ?, updated_at = ? WHERE id = ?`,
+			`UPDATE credentials SET name = ?, scope = ?, username = ?, ciphertext = ?, masked_value = ?, refresh_token_ciphertext = NULL, updated_at = ? WHERE id = ?`,
 			name, scope, username, newSealed, masked, nowStr, id,
 		)
 	} else {
@@ -399,6 +431,119 @@ func (s *service) OpenSecret(sealed []byte) ([]byte, error) {
 		return nil, ErrVaultUnconfigured
 	}
 	return open(s.key, sealed)
+}
+
+// RefreshContext 返回 OAuth 凭据的刷新上下文(provider + 解密后的 refresh_token)。
+func (s *service) RefreshContext(id string) (string, string, error) {
+	if !s.configured() {
+		return "", "", ErrVaultUnconfigured
+	}
+	var name string
+	var sealedRefresh []byte
+	err := s.db.QueryRow(
+		`SELECT name, refresh_token_ciphertext FROM credentials WHERE id = ?`, id,
+	).Scan(&name, &sealedRefresh)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", "", ErrNotFound
+		}
+		return "", "", fmt.Errorf("vault: get refresh context: %w", err)
+	}
+	if len(sealedRefresh) == 0 {
+		// 手动创建等无 refresh_token 的凭据:非错误,返回空刷新上下文。
+		return "", "", nil
+	}
+	plain, err := open(s.key, sealedRefresh)
+	if err != nil {
+		return "", "", err // ErrDecrypt:不泄漏明文/密钥
+	}
+	return oauthProviderFromName(name), string(plain), nil
+}
+
+// oauthProviderFromName 从 OAuth 创建的凭据名("provider:login")推导 provider。
+// 非该形态(如手动创建的凭据)返回空串;provider 合法性由 oauth 层校验。
+func oauthProviderFromName(name string) string {
+	i := strings.IndexByte(name, ':')
+	if i <= 0 {
+		return ""
+	}
+	return name[:i]
+}
+
+// RotateAccessToken 轮换 OAuth access_token(及可选的新 refresh_token / 新过期时间)落库。
+// expiresAt 为空时保留既有过期时间(平台未返回 expires_in 的兜底,不清空判断依据)。
+func (s *service) RotateAccessToken(id string, accessToken, refreshToken, expiresAt string) error {
+	if !s.configured() {
+		return ErrVaultUnconfigured
+	}
+	if strings.TrimSpace(accessToken) == "" {
+		return ErrEmptySecret
+	}
+	var credType string
+	if err := s.db.QueryRow(`SELECT type FROM credentials WHERE id = ?`, id).Scan(&credType); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("vault: load type for rotate: %w", err)
+	}
+
+	sealed, err := seal(s.key, []byte(accessToken))
+	if err != nil {
+		return err
+	}
+	var sealedRefresh []byte
+	if rt := strings.TrimSpace(refreshToken); rt != "" {
+		sealedRefresh, err = seal(s.key, []byte(rt))
+		if err != nil {
+			return err
+		}
+	} else {
+		// 刷新响应未携带新 refresh_token:保留既有 refresh_token(不清空),
+		// 避免凭据在下一次过期后永久失去续期能力(平台行为变化/响应缺字段时的兜底)。
+		_ = s.db.QueryRow(
+			`SELECT refresh_token_ciphertext FROM credentials WHERE id = ?`, id,
+		).Scan(&sealedRefresh)
+	}
+	newExpiresAt := strings.TrimSpace(expiresAt)
+	if newExpiresAt == "" {
+		// 刷新响应未提供 expires_in:保留既有过期时间,不清空判断依据。
+		var cur string
+		_ = s.db.QueryRow(`SELECT expires_at FROM credentials WHERE id = ?`, id).Scan(&cur)
+		newExpiresAt = cur
+	}
+	nowStr := time.Now().UTC().Format(time.RFC3339)
+	_, err = s.db.Exec(
+		`UPDATE credentials SET ciphertext = ?, refresh_token_ciphertext = ?, masked_value = ?, expires_at = ?, updated_at = ? WHERE id = ?`,
+		sealed, sealedRefresh, mask(credType, accessToken), newExpiresAt, nowStr, id,
+	)
+	if err != nil {
+		return fmt.Errorf("vault: rotate access token: %w", err)
+	}
+	return nil
+}
+
+// AccessExpiry 返回 OAuth access_token 的过期时间(由 expires_in 换算并落库)。
+// nil = 未知(存量凭据或平台未返回 expires_in),续期逻辑按「首次使用刷新一次并补记」处理。
+func (s *service) AccessExpiry(id string) (*time.Time, error) {
+	if !s.configured() {
+		return nil, ErrVaultUnconfigured
+	}
+	var raw sql.NullString
+	err := s.db.QueryRow(`SELECT expires_at FROM credentials WHERE id = ?`, id).Scan(&raw)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("vault: get access expiry: %w", err)
+	}
+	if !raw.Valid || strings.TrimSpace(raw.String) == "" {
+		return nil, nil
+	}
+	t, err := time.Parse(time.RFC3339, raw.String)
+	if err != nil {
+		return nil, nil // 解析失败按未知处理(保守刷新,不阻塞)
+	}
+	return &t, nil
 }
 
 // getView 回读单条凭据的掩码视图。

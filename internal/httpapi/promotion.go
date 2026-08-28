@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/huangchengsir/pipewright/internal/approval"
 	"github.com/huangchengsir/pipewright/internal/audit"
+	"github.com/huangchengsir/pipewright/internal/gitrefresh"
 	"github.com/huangchengsir/pipewright/internal/promotion"
 	"github.com/huangchengsir/pipewright/internal/run"
 	"github.com/huangchengsir/pipewright/internal/vault"
@@ -38,14 +39,22 @@ func (l runLookup) LookupRun(ctx context.Context, runID string) (promotion.RunIn
 	return promotion.RunInfo{ID: r.ID, ProjectID: r.ProjectID, Status: r.Status}, nil
 }
 
-// secretReveal 把 vault.Vault 适配为 promotion.SecretResolver(Reveal 不刷新 last_used_at)。
-type secretReveal struct{ v vault.Vault }
+// secretReveal 把 vault.Vault 适配为 promotion.SecretResolver。OAuth 凭据过期时先经 refresher
+// 静默续期再取明文;非 OAuth/手动凭据原样返回。注入目标环境是真正的凭据使用,更新 last_used_at 合理。
+type secretReveal struct {
+	v         vault.Vault
+	refresher gitrefresh.Refresher
+}
 
 func (s secretReveal) Reveal(credentialID string) (string, error) {
 	if s.v == nil {
 		return "", errors.New("vault unconfigured")
 	}
-	return s.v.Reveal(credentialID)
+	auth, err := gitrefresh.Resolve(context.Background(), s.v, s.refresher, credentialID)
+	if err != nil {
+		return "", err
+	}
+	return auth.Token, nil
 }
 
 // promotionGate 复用审批门内核(approval.Coordinator + Store)实现 promotion.Gate:
@@ -165,7 +174,7 @@ func makeSaveEnvironmentsHandler(store *promotion.Store, rec audit.Recorder) htt
 // body {targetEnvironment?}:留空取链上下一级;给定则校验恰为下一级(防跳级)。
 // gated 目标会阻塞等待审批(经既有 /runs/{id}/approve|reject 决定)。
 func makePromoteRunHandler(store *promotion.Store, runs run.Service, coord *approval.Coordinator,
-	astore *approval.Store, vlt vault.Vault, rec audit.Recorder) http.HandlerFunc {
+	astore *approval.Store, vlt vault.Vault, refresher gitrefresh.Refresher, rec audit.Recorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if store == nil || runs == nil {
 			writeError(w, http.StatusServiceUnavailable, "internal", "晋级服务未初始化")
@@ -184,7 +193,7 @@ func makePromoteRunHandler(store *promotion.Store, runs run.Service, coord *appr
 		if coord != nil && astore != nil {
 			gate = promotionGate{coord: coord, store: astore, runID: runID}
 		}
-		coordinator := promotion.NewCoordinator(store, runLookup{runs: runs}, gate, secretReveal{v: vlt})
+		coordinator := promotion.NewCoordinator(store, runLookup{runs: runs}, gate, secretReveal{v: vlt, refresher: refresher})
 
 		res, err := coordinator.Promote(r.Context(), runID, target, auditActor)
 		if err != nil {

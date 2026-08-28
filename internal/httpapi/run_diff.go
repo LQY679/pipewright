@@ -6,6 +6,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/huangchengsir/pipewright/internal/ai"
+	"github.com/huangchengsir/pipewright/internal/gitrefresh"
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/run"
 	"github.com/huangchengsir/pipewright/internal/vault"
@@ -44,10 +45,11 @@ type runDiffDTO struct {
 
 // runDiffDeps 聚合 diff 端点所需服务(复用已注入 runs + projects + vault + 注入的 RunDiffer)。
 type runDiffDeps struct {
-	runs     run.Service
-	projects project.Service
-	vault    vault.Vault
-	differ   ai.RunDiffer
+	runs      run.Service
+	projects  project.Service
+	vault     vault.Vault
+	differ    ai.RunDiffer
+	refresher gitrefresh.Refresher
 }
 
 // toRunDiffDTO 把领域 ai.RunDiff 映射为冻结 DTO(注入 baselineRunId/commits 上下文)。
@@ -130,7 +132,7 @@ func makeRunDiffHandler(d runDiffDeps) http.HandlerFunc {
 		}
 		username, token := "", ""
 		if d.vault != nil && strings.TrimSpace(proj.CredentialID) != "" {
-			if auth, terr := d.vault.GetGitAuth(proj.CredentialID); terr == nil {
+			if auth, terr := gitrefresh.Resolve(ctx, d.vault, d.refresher, proj.CredentialID); terr == nil {
 				username, token = auth.Username, auth.Token
 			}
 		}

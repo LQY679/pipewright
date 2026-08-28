@@ -27,6 +27,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/deploy"
 	"github.com/huangchengsir/pipewright/internal/dnsprovider"
 	"github.com/huangchengsir/pipewright/internal/environments"
+	"github.com/huangchengsir/pipewright/internal/gitrefresh"
 	"github.com/huangchengsir/pipewright/internal/i18n"
 	"github.com/huangchengsir/pipewright/internal/library"
 	"github.com/huangchengsir/pipewright/internal/metrics"
@@ -104,6 +105,9 @@ type options struct {
 	proxy            proxy.Service
 	dnsProviders     dnsprovider.Service
 	previewEnvs      PreviewService
+	// gitRefresher 是 OAuth access_token 静默续期器:source/refs/run-diff/pac-preview 等
+	// git 读写入口取 token 前先尝试用保存的 refresh_token 换新 token。nil 则跳过(向后兼容)。
+	gitRefresher gitrefresh.Refresher
 }
 
 // WithArtifactStore 注入制品库(Story 8-16):挂载产物下载端点
@@ -175,6 +179,13 @@ func WithCustomNodes(s library.CustomNodeService) Option {
 // 不传则保险库相关端点不可用(返回 vault_unconfigured)。
 func WithVault(v vault.Vault) Option {
 	return func(o *options) { o.vault = v }
+}
+
+// WithGitRefresher 注入 OAuth access_token 静默续期器:source/refs/run-diff/pac-preview 等
+// git 读写入口取 token 前先尝试用保存的 refresh_token 换新 token,避免凭据过期导致功能失败。
+// nil 则跳过(向后兼容)。
+func WithGitRefresher(r gitrefresh.Refresher) Option {
+	return func(o *options) { o.gitRefresher = r }
 }
 
 // WithProjects 注入项目服务,挂载 /api/projects* 路由。
@@ -561,7 +572,7 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Get("/runs/{id}/approvals", makeListApprovalsHandler(o.approvalStore))
 		// 环境晋级流(Story 8-7 / FR-8-7):把成功运行晋级到下一环境(gated 复用审批门内核)+ 列晋级历史。
 		// promote 为写方法,过 auth + CSRF;o.promotionStore 为 nil → 503。
-		ar.Post("/runs/{id}/promote", makePromoteRunHandler(o.promotionStore, rs, o.approvalCoord, o.approvalStore, o.vault, aud))
+		ar.Post("/runs/{id}/promote", makePromoteRunHandler(o.promotionStore, rs, o.approvalCoord, o.approvalStore, o.vault, o.gitRefresher, aud))
 		ar.Get("/runs/{id}/promotions", makeListRunPromotionsHandler(o.promotionStore))
 		// SSH 部署执行(Story 4.2 / FR-10):认证 + CSRF(写方法)。dep 为 nil → 503。
 		// 取 run + 产物 + 服务器 → deploy.Deploy(逐机经 SSH 执行部署命令,array 不拼 shell)
@@ -588,10 +599,11 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// 无 baseline / 无 commit / 克隆失败 / commit 不可达 → 200 available:false degraded(绝不 500);
 		// run 不存在 → 404。复用已注入 rs + p + v + 注入的 RunDiffer。differ 为 nil → 503。
 		ar.Get("/runs/{id}/diff", makeRunDiffHandler(runDiffDeps{
-			runs:     rs,
-			projects: p,
-			vault:    v,
-			differ:   o.runDiffer,
+			runs:      rs,
+			projects:  p,
+			vault:     v,
+			differ:    o.runDiffer,
+			refresher: o.gitRefresher,
 		}))
 
 		// 诊断反馈闭环(Story 7.5;FR-26):对 ready 诊断 👍/👎(👎 可附正确根因)。认证 + CSRF(写方法)。
@@ -636,6 +648,7 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 			triggers:    t,
 			vault:       v,
 			customNodes: o.customNodes,
+			refresher:   o.gitRefresher,
 		}
 		ar.Post("/projects/{id}/pipeline/ai-generate", makeAIGenerateHandler(aiGenDeps))
 		ar.Post("/projects/{id}/pipeline/ai-apply", makeAIApplyHandler(aiGenDeps))
@@ -658,7 +671,7 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		// 只读源码读取(Story 3.6;FR-4 预埋,7-4 消费):go-git 浅克隆读 tree/blob。
 		// 复用已注入 projects(p)+ vault(v)取凭据 + 注入的 SourceReader。reader 为 nil → 503。
 		// /source/tree、/source/blob 比 /projects/{id} 多两段,不会被吞;GET 过 auth。
-		srcDeps := sourceDeps{projects: p, vault: v, reader: o.sourceReader}
+		srcDeps := sourceDeps{projects: p, vault: v, reader: o.sourceReader, refresher: o.gitRefresher}
 		ar.Get("/projects/{id}/source/tree", makeSourceTreeHandler(srcDeps))
 		ar.Get("/projects/{id}/source/blob", makeSourceBlobHandler(srcDeps))
 
@@ -668,8 +681,8 @@ func New(webFS fs.FS, authn auth.Authenticator, opts ...Option) http.Handler {
 		ar.Get("/projects/{id}/pac/preview", makePacPreviewHandler(srcDeps))
 
 		// 列仓库分支/tag(代码管理区 · Story 8-18):供前端触发时分支/commit 下拉。o.refsLister 为 nil → 503。
-		ar.Get("/projects/{id}/refs", makeListRefsHandler(p, v, o.refsLister))
-		ar.Get("/projects/{id}/commits", makeListCommitsHandler(p, v, o.refsLister))
+		ar.Get("/projects/{id}/refs", makeListRefsHandler(p, v, o.refsLister, o.gitRefresher))
+		ar.Get("/projects/{id}/commits", makeListCommitsHandler(p, v, o.refsLister, o.gitRefresher))
 		ar.Get("/projects/{id}/runner", makeGetRunnerHandler(o.runnerConfig))
 		ar.Put("/projects/{id}/runner", makeSaveRunnerHandler(o.runnerConfig, aud))
 

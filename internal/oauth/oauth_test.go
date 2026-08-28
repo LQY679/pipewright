@@ -323,6 +323,166 @@ func TestExchangeProviderErrorMapsToExchangeFailed(t *testing.T) {
 	}
 }
 
+// ---- refresh_token(静默续期)--------------------------------------------
+
+// mockRefreshProvider 回 /oauth/token 按 grant_type 分支:
+//   - authorization_code → access_token + refresh_token(模拟 Gitee 等附带回执)
+//   - refresh_token → 轮换的新 access_token(及新 refresh_token)
+//
+// /api/v4/user 校验 Bearer access_token。
+func mockRefreshProvider(t *testing.T) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/oauth/token", func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		if r.Header.Get("Accept") != "application/json" {
+			t.Errorf("token request missing Accept: application/json")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.FormValue("grant_type") {
+		case "refresh_token":
+			_, _ = w.Write([]byte(`{"access_token":"gho_REFRESHED_999","refresh_token":"rt_rotated_888","expires_in":86400}`))
+		default:
+			_, _ = w.Write([]byte(`{"access_token":"gho_FAKE_TOKEN_123","refresh_token":"rt_initial_456","expires_in":86400}`))
+		}
+	})
+	mux.HandleFunc("/api/v4/user", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer gho_FAKE_TOKEN_123" {
+			t.Errorf("user request bad auth header: %q", r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"login":"octocat","username":"octocat","id":1}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestExchangeCapturesRefreshToken(t *testing.T) {
+	mock := mockRefreshProvider(t)
+	svc, v, _, _ := newService(t, mock.Client())
+	if _, err := svc.SaveApp(ctx(), SaveAppInput{
+		Provider: ProviderCustom, ClientID: "cid", ClientSecret: strp("sec"),
+		BaseURL: mock.URL, Enabled: true,
+	}); err != nil {
+		t.Fatalf("SaveApp: %v", err)
+	}
+
+	res, err := svc.Exchange(ctx(), ProviderCustom, "auth-code-xyz", mock.URL+"/cb")
+	if err != nil {
+		t.Fatalf("Exchange: %v", err)
+	}
+	if res.AccessToken != "gho_FAKE_TOKEN_123" {
+		t.Fatalf("access token: %q", res.AccessToken)
+	}
+	if res.RefreshToken != "rt_initial_456" {
+		t.Fatalf("refresh token: %q, want rt_initial_456", res.RefreshToken)
+	}
+	if res.ExpiresIn != 86400 {
+		t.Fatalf("expires_in: %d, want 86400", res.ExpiresIn)
+	}
+
+	// 经 vault.Create 一并保存 refresh_token → RefreshContext 可回读。
+	cred, err := v.Create(vault.CreateInput{
+		Name: ProviderCustom + ":" + res.Login, Type: vault.TypeGitToken, Scope: "global",
+		Secret: res.AccessToken, RefreshToken: res.RefreshToken,
+	})
+	if err != nil {
+		t.Fatalf("vault.Create: %v", err)
+	}
+	provider, rt, err := v.RefreshContext(cred.ID)
+	if err != nil {
+		t.Fatalf("RefreshContext: %v", err)
+	}
+	if provider != ProviderCustom || rt != "rt_initial_456" {
+		t.Fatalf("refresh context: provider=%q rt=%q", provider, rt)
+	}
+	// 未附 refresh_token 的手动凭据 → 空刷新上下文(非错误)。
+	manual, _ := v.Create(vault.CreateInput{Name: "manual", Type: vault.TypeGitToken, Scope: "global", Secret: "tok"})
+	p2, rt2, err := v.RefreshContext(manual.ID)
+	if err != nil || p2 != "" || rt2 != "" {
+		t.Fatalf("manual refresh context should be empty: p=%q rt=%q err=%v", p2, rt2, err)
+	}
+}
+
+func TestRefreshAccessTokenRotatesToken(t *testing.T) {
+	mock := mockRefreshProvider(t)
+	svc, v, _, _ := newService(t, mock.Client())
+	if _, err := svc.SaveApp(ctx(), SaveAppInput{
+		Provider: ProviderCustom, ClientID: "cid", ClientSecret: strp("sec"),
+		BaseURL: mock.URL, Enabled: true,
+	}); err != nil {
+		t.Fatalf("SaveApp: %v", err)
+	}
+
+	cred, _ := v.Create(vault.CreateInput{
+		Name: ProviderCustom + ":octocat", Type: vault.TypeGitToken, Scope: "global",
+		Secret: "gho_FAKE_TOKEN_123", RefreshToken: "rt_initial_456",
+	})
+
+	// 静默续期:用 refresh_token 换新 access_token(及轮换的新 refresh_token)并落库。
+	res, err := svc.RefreshAccessToken(ctx(), ProviderCustom, "rt_initial_456")
+	if err != nil {
+		t.Fatalf("RefreshAccessToken: %v", err)
+	}
+	if res.AccessToken != "gho_REFRESHED_999" || res.RefreshToken != "rt_rotated_888" {
+		t.Fatalf("refresh result: %+v", res)
+	}
+	if res.ExpiresIn != 86400 {
+		t.Fatalf("expires_in: %d, want 86400", res.ExpiresIn)
+	}
+	if err := v.RotateAccessToken(cred.ID, res.AccessToken, res.RefreshToken, ""); err != nil {
+		t.Fatalf("RotateAccessToken: %v", err)
+	}
+
+	// 落库后可解出新 token + 新 refresh_token。
+	got, err := v.Reveal(cred.ID)
+	if err != nil || got != "gho_REFRESHED_999" {
+		t.Fatalf("rotated access token: %q err=%v", got, err)
+	}
+	_, rt, err := v.RefreshContext(cred.ID)
+	if err != nil || rt != "rt_rotated_888" {
+		t.Fatalf("rotated refresh token: %q err=%v", rt, err)
+	}
+}
+
+func TestRefreshAccessTokenUnconfiguredProvider(t *testing.T) {
+	svc, _, _, _ := newService(t, http.DefaultClient)
+	if _, err := svc.RefreshAccessToken(ctx(), ProviderGitee, "rt-any"); err != ErrAppNotConfigured {
+		t.Fatalf("unconfigured refresh err = %v, want ErrAppNotConfigured", err)
+	}
+}
+
+func TestRefreshAccessTokenBadTokenMapsToExchangeFailed(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/oauth/token", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"invalid_grant","secret_leak":"the-client-secret"}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	svc, _, _, _ := newService(t, srv.Client())
+	_, _ = svc.SaveApp(ctx(), SaveAppInput{Provider: ProviderCustom, ClientID: "cid", ClientSecret: strp("the-client-secret"), BaseURL: srv.URL, Enabled: true})
+	_, err := svc.RefreshAccessToken(ctx(), ProviderCustom, "stale-rt")
+	if err != ErrExchangeFailed {
+		t.Fatalf("refresh err = %v, want ErrExchangeFailed", err)
+	}
+	if strings.Contains(err.Error(), "the-client-secret") || strings.Contains(err.Error(), "invalid_grant") {
+		t.Fatalf("错误体泄漏了 provider 原文/secret: %v", err)
+	}
+}
+
+func TestRefreshAccessTokenEmptyRefreshToken(t *testing.T) {
+	svc, _, _, _ := newService(t, http.DefaultClient)
+	if _, err := svc.SaveApp(ctx(), SaveAppInput{Provider: ProviderGitee, ClientID: "cid", ClientSecret: strp("s"), Enabled: true}); err != nil {
+		t.Fatalf("SaveApp: %v", err)
+	}
+	if _, err := svc.RefreshAccessToken(ctx(), ProviderGitee, "  "); err != ErrExchangeFailed {
+		t.Fatalf("empty refresh token err = %v, want ErrExchangeFailed", err)
+	}
+}
+
 // ---- state CSRF --------------------------------------------------------
 
 func TestStateRoundTrip(t *testing.T) {

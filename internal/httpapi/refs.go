@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/huangchengsir/pipewright/internal/gitrefresh"
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/repocache"
 	"github.com/huangchengsir/pipewright/internal/vault"
@@ -40,7 +41,7 @@ type refsResponse struct {
 // makeListRefsHandler 返回 GET /api/projects/{id}/refs handler(认证;只读)。
 // 取项目仓库地址 + 凭据 → repocache.ListRefs(镜像增量更新后读)→ DTO。
 // 项目不存在 → 404;代码管理区未启用 → 503;拉取/读取失败 → 502(人读,无凭据明文)。
-func makeListRefsHandler(projects project.Service, v vault.Vault, lister RefsLister) http.HandlerFunc {
+func makeListRefsHandler(projects project.Service, v vault.Vault, lister RefsLister, refresher gitrefresh.Refresher) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if lister == nil || projects == nil {
 			writeError(w, http.StatusServiceUnavailable, "repocache_disabled", "代码管理区未启用,无法列分支")
@@ -57,10 +58,10 @@ func makeListRefsHandler(projects project.Service, v vault.Vault, lister RefsLis
 			return
 		}
 
-		// 取仓库凭据(进程内即用即弃);取不到不致命 → 空 token(公开仓库可成,私有走拉取失败)。
+		// 取仓库凭据(进程内即用即弃;取 token 前先尝试静默续期过期 token);取不到不致命 → 空 token(公开仓库可成,私有走拉取失败)。
 		username, token := "", ""
 		if v != nil && strings.TrimSpace(proj.CredentialID) != "" {
-			if auth, terr := v.GetGitAuth(proj.CredentialID); terr == nil {
+			if auth, terr := gitrefresh.Resolve(r.Context(), v, refresher, proj.CredentialID); terr == nil {
 				username, token = auth.Username, auth.Token
 			}
 		}
@@ -95,7 +96,7 @@ type commitDTO struct {
 
 // makeListCommitsHandler 返回 GET /api/projects/{id}/commits?ref=&limit= handler(认证;只读)。
 // 列某 ref(分支/tag/commit;空=默认分支)的最近提交,供前端选 commit 下拉。
-func makeListCommitsHandler(projects project.Service, v vault.Vault, lister RefsLister) http.HandlerFunc {
+func makeListCommitsHandler(projects project.Service, v vault.Vault, lister RefsLister, refresher gitrefresh.Refresher) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if lister == nil || projects == nil {
 			writeError(w, http.StatusServiceUnavailable, "repocache_disabled", "代码管理区未启用,无法列提交")
@@ -124,7 +125,7 @@ func makeListCommitsHandler(projects project.Service, v vault.Vault, lister Refs
 
 		username, token := "", ""
 		if v != nil && strings.TrimSpace(proj.CredentialID) != "" {
-			if auth, terr := v.GetGitAuth(proj.CredentialID); terr == nil {
+			if auth, terr := gitrefresh.Resolve(r.Context(), v, refresher, proj.CredentialID); terr == nil {
 				username, token = auth.Username, auth.Token
 			}
 		}

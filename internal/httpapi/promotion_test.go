@@ -11,9 +11,12 @@ import (
 
 	"github.com/huangchengsir/pipewright/internal/approval"
 	"github.com/huangchengsir/pipewright/internal/auth"
+	"github.com/huangchengsir/pipewright/internal/gitrefresh"
+	"github.com/huangchengsir/pipewright/internal/oauth"
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/promotion"
 	"github.com/huangchengsir/pipewright/internal/run"
+	"github.com/huangchengsir/pipewright/internal/store"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
 
@@ -166,6 +169,66 @@ func TestPromoteGatedWaitsForApproval(t *testing.T) {
 
 	if code := <-done; code != http.StatusOK {
 		t.Fatalf("gated promote final status = %d; want 200", code)
+	}
+}
+
+// TestSecretRevealRefreshesExpiredOAuthToken 断言:secretReveal(晋级注入 secret 变量的解密入口)
+// 对过期 OAuth 凭据先经 refresh_token 静默续期再返回明文;手动凭据原样解密。
+func TestSecretRevealRefreshesExpiredOAuthToken(t *testing.T) {
+	oauthSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/oauth/token" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = r.ParseForm()
+		w.Header().Set("Content-Type", "application/json")
+		if r.FormValue("grant_type") == "refresh_token" {
+			_, _ = w.Write([]byte(`{"access_token":"gho_REFRESHED_777","refresh_token":"rt_ROTATED_666"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"access_token":"gho_STALE_111","refresh_token":"rt_STALE_222"}`))
+	}))
+	t.Cleanup(oauthSrv.Close)
+
+	st, err := store.Open(t.TempDir() + "/promotion-refresh.db")
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	v := vault.New(st.DB, testMasterKey())
+	cred, err := v.Create(vault.CreateInput{
+		Name: "custom:octocat", Type: vault.TypeGitToken,
+		Secret: "gho_STALE_111", RefreshToken: "rt_STALE_222",
+	})
+	if err != nil {
+		t.Fatalf("vault.Create: %v", err)
+	}
+
+	sec := "sec"
+	oauthSvc := oauth.New(st.DB, v, oauthSrv.Client())
+	if _, err := oauthSvc.SaveApp(context.Background(), oauth.SaveAppInput{
+		Provider: oauth.ProviderCustom, ClientID: "cid", ClientSecret: &sec, BaseURL: oauthSrv.URL, Enabled: true,
+	}); err != nil {
+		t.Fatalf("SaveApp: %v", err)
+	}
+	refresher := gitrefresh.New(oauthSvc, v)
+
+	sr := secretReveal{v: v, refresher: refresher}
+	got, err := sr.Reveal(cred.ID)
+	if err != nil || got != "gho_REFRESHED_777" {
+		t.Fatalf("reveal after refresh = %q err=%v, want gho_REFRESHED_777", got, err)
+	}
+	// 轮换落库供后续克隆/部署直接使用。
+	if tok, _ := v.Reveal(cred.ID); tok != "gho_REFRESHED_777" {
+		t.Fatalf("vault not rotated: %q", tok)
+	}
+
+	// 手动凭据(无 refresh_token):不触发续期,原样解密。
+	manual, _ := v.Create(vault.CreateInput{Name: "manual", Type: vault.TypeGitToken, Secret: "plain-token"})
+	got2, err := sr.Reveal(manual.ID)
+	if err != nil || got2 != "plain-token" {
+		t.Fatalf("manual reveal = %q err=%v", got2, err)
 	}
 }
 

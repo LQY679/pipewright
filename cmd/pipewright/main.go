@@ -33,6 +33,7 @@ import (
 	"github.com/huangchengsir/pipewright/internal/deploy"
 	"github.com/huangchengsir/pipewright/internal/dnsprovider"
 	"github.com/huangchengsir/pipewright/internal/environments"
+	"github.com/huangchengsir/pipewright/internal/gitrefresh"
 	"github.com/huangchengsir/pipewright/internal/httpapi"
 	"github.com/huangchengsir/pipewright/internal/library"
 	"github.com/huangchengsir/pipewright/internal/mask"
@@ -125,9 +126,18 @@ func main() {
 	}
 	approvalSigner := approval.NewSigner(approvalSignerKey)
 
+	// 装配多 provider OAuth 凭据接入服务(连接 Gitee/GitHub/GitLab/自建):复用 vault secretbox 加密
+	// OAuth 应用 client_secret(密文入库);OAuth 拿到的 access_token 经 vault.Create 存成 git_token 凭据,
+	// 之后克隆/构建直接复用(无需改克隆逻辑)。Exchange 兑换用带超时的注入 HTTP 客户端(~10s);
+	// state CSRF 短期内存绑会话。master key 未配置时涉及密钥的操作降级为明确错误(不 panic)。
+	oauthSvc := oauth.New(st.DB, credVault, &http.Client{Timeout: 10 * time.Second})
+	// 装配 OAuth access_token 静默续期器:OAuth 兑换时保存的 refresh_token(仅 Gitee 等平台)在
+	// access_token 过期后自动换取新 token 落库,克隆/探测/读仓库不再因凭据过期失败。
+	gitRefresher := gitrefresh.New(oauthSvc, credVault)
+
 	// 装配项目服务(Story 2.1):经 store 触库、经 vault 取凭据做 ls-remote 校验(进程内,用完即弃)。
 	// prober 传 nil → 使用默认 go-git ListRemote 实现(纯 Go,无宿主 git 依赖,不驻留)。
-	projectSvc := project.New(st.DB, credVault, nil)
+	projectSvc := project.New(st.DB, credVault, nil, project.WithGitRefresher(gitRefresher))
 
 	// 装配触发配置服务(Story 2.3):复用 vault secretbox(master key)加密 webhook 签名密钥。
 	// master key 未配置时,涉及密钥的读取/重置降级为明确错误(不 panic)。
@@ -334,7 +344,7 @@ func main() {
 	// DAG 模式探测不到容器 CLI(docker)时优雅回退 stub(现有逻辑,NFR-10)。
 	var runnerOpts []run.PoolOption
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("PIPEWRIGHT_RUNNER")), "legacy") {
-		runnerOpts = buildRunnerOption(projectSvc, pipelineSettingsSvc, credVault, artStore, repoCache)
+		runnerOpts = buildRunnerOption(projectSvc, pipelineSettingsSvc, credVault, artStore, repoCache, gitRefresher)
 		log.Printf("[run] PIPEWRIGHT_RUNNER=legacy:旧版固定流程运行器已启用(clone→对仓库根 docker build→deploy,⚠ 不执行 UI 可视化流水线 stages;如需真按流水线跑请去掉该 env)")
 	} else {
 		// 阶段执行体(Story 8-2):探测到容器 CLI → 注入真实阶段执行器(script 类型 job 在隔离
@@ -364,7 +374,7 @@ func main() {
 		var specLoader dagrun.SpecLoader = pacSpecLoader{pacloader.New(
 			pipelineSvc,
 			pacProjectLookup{projectSvc},
-			pacGitAuthResolver{vault: credVault},
+			pacGitAuthResolver{vault: credVault, refresher: gitRefresher},
 			pacBlobFetcher{httpapi.NewSourceReader()},
 			pacGlobalOverride,
 		)}
@@ -412,7 +422,7 @@ func main() {
 	reporter := prstatus.NewReporter(&http.Client{Timeout: 10 * time.Second}).WithBaseURLs(
 		strings.TrimSpace(os.Getenv("PIPEWRIGHT_PR_STATUS_GITHUB_BASE")),
 		strings.TrimSpace(os.Getenv("PIPEWRIGHT_PR_STATUS_GITEE_BASE")))
-	prHook := httpapi.NewPRStatusHook(runSvc, projectSvc, credVault, reporter,
+	prHook := httpapi.NewPRStatusHook(runSvc, projectSvc, credVault, gitRefresher, reporter,
 		strings.TrimSpace(os.Getenv("PIPEWRIGHT_PUBLIC_URL")), prStatusGlobalOverride)
 	notify := terminalHook
 	terminalHook = func(ctx context.Context, runID, finalStatus string) {
@@ -558,15 +568,11 @@ func main() {
 	}
 	metricsSampleCollector := httpapi.NewAnomalyCollector(targetSvc)
 
-	// 装配多 provider OAuth 凭据接入服务(连接 Gitee/GitHub/GitLab/自建):复用 vault secretbox 加密
-	// OAuth 应用 client_secret(密文入库);OAuth 拿到的 access_token 经 vault.Create 存成 git_token 凭据,
-	// 之后克隆/构建直接复用(无需改克隆逻辑)。Exchange 兑换用带超时的注入 HTTP 客户端(~10s);
-	// state CSRF 短期内存绑会话。master key 未配置时涉及密钥的操作降级为明确错误(不 panic)。
-	oauthSvc := oauth.New(st.DB, credVault, &http.Client{Timeout: 10 * time.Second})
-
+	// oauthSvc / gitRefresher 已在前文(装配项目服务前)构造:OAuth 兑换存凭据与 access_token
+	// 静默续期器共用同一 OAuth 服务实例,httpapi 与各 git 读写入口共用同一 Refresher。
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(webFS, authSvc, httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithProxy(proxySvc), httpapi.WithDNSProviders(dnsSvc), httpapi.WithPreviewEnvs(previewSvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithAnomalyConfig(int(anomalyInterval.Seconds()), int(anomalyCooldown.Seconds())), httpapi.WithMetricsHistory(metricsHist), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc)),
+		Handler:           httpapi.New(webFS, authSvc, httpapi.WithVault(credVault), httpapi.WithProjects(projectSvc), httpapi.WithTriggers(triggerSvc), httpapi.WithPipelines(pipelineSvc), httpapi.WithPipelineSettings(pipelineSettingsSvc), httpapi.WithRuns(runSvc, pool), httpapi.WithWebhooks(webhookReceiver), httpapi.WithAudit(auditRec), httpapi.WithAccount(authSvc), httpapi.WithAISettings(aiSvc), httpapi.WithAIGenerate(repoAnalyzer), httpapi.WithRunDiff(runDiffer), httpapi.WithSource(sourceReader), httpapi.WithRefs(refsLister), httpapi.WithArtifactStore(artStore), httpapi.WithServers(targetSvc), httpapi.WithRunnerConfig(runnerSvc), httpapi.WithDeploy(deploySvc), httpapi.WithNotifications(notifySvc), httpapi.WithRetention(retentionSvc), httpapi.WithProxy(proxySvc), httpapi.WithDNSProviders(dnsSvc), httpapi.WithPreviewEnvs(previewSvc), httpapi.WithDiagnosisFeedback(feedbackSvc), httpapi.WithAnomaly(anomalySvc), httpapi.WithAnomalyConfig(int(anomalyInterval.Seconds()), int(anomalyCooldown.Seconds())), httpapi.WithMetricsHistory(metricsHist), httpapi.WithSecretSource(secretSrc), httpapi.WithOAuth(oauthSvc), httpapi.WithGitRefresher(gitRefresher), httpapi.WithCron(cronSvc), httpapi.WithChain(chainSvc), httpapi.WithApprovals(approvalCoord, approvalStore), httpapi.WithApprovalLinks(approvalSigner), httpapi.WithConcurrency(concurrencySvc), httpapi.WithParameters(parameterSvc), httpapi.WithPromotion(promotionStore), httpapi.WithEnvironments(environmentsSvc), httpapi.WithDoraMetrics(doraMetricsSvc), httpapi.WithTemplates(templateSvc), httpapi.WithVariableGroups(varGroupSvc), httpapi.WithCustomNodes(customNodeSvc)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// WriteTimeout 置 0:SSE 长连接(/api/runs/{id}/events)不可被写超时切断;
@@ -693,10 +699,14 @@ func (p pacProjectLookup) Lookup(ctx context.Context, projectID string) (pacload
 	}, nil
 }
 
-type pacGitAuthResolver struct{ vault vault.Vault }
+type pacGitAuthResolver struct {
+	vault     vault.Vault
+	refresher gitrefresh.Refresher
+}
 
 func (r pacGitAuthResolver) GetGitAuth(credentialID string) (string, string, error) {
-	auth, err := r.vault.GetGitAuth(credentialID)
+	// 取 token 前先尝试静默续期过期 token(仅 OAuth 凭据存有 refresh_token 时生效)。
+	auth, err := gitrefresh.Resolve(context.Background(), r.vault, r.refresher, credentialID)
 	if err != nil {
 		return "", "", err
 	}
@@ -735,7 +745,7 @@ func (l pacSpecLoader) Get(ctx context.Context, projectID, branch string) (*pipe
 //   - 其它/缺省 auto:尝试构造真实 Builder,探测不到容器 CLI 时回退桩(优雅降级,NFR-10)。
 //
 // 返回 []run.PoolOption(可能为空):空 ⇒ 用 pool 默认 StubRunner。
-func buildRunnerOption(projectSvc project.Service, settingsSvc pipeline.SettingsService, v vault.Vault, artStore *artifactstore.Store, repoCache *repocache.Cache) []run.PoolOption {
+func buildRunnerOption(projectSvc project.Service, settingsSvc pipeline.SettingsService, v vault.Vault, artStore *artifactstore.Store, repoCache *repocache.Cache, gitRefresher gitrefresh.Refresher) []run.PoolOption {
 	clonerOpt := func(*build.Builder) {}
 	if repoCache != nil {
 		clonerOpt = build.WithCloner(repoCache)
@@ -746,14 +756,14 @@ func buildRunnerOption(projectSvc project.Service, settingsSvc pipeline.Settings
 		log.Printf("[build] PIPEWRIGHT_BUILDER=stub:使用桩 runner(合成日志,不碰容器)")
 		return nil
 	case "real":
-		b, err := build.NewBuilder(projectSvc, settingsSvc, v, build.WithArtifactStore(artStore), build.WithImageGC(os.Getenv("PIPEWRIGHT_NO_IMAGE_GC") != "1"), clonerOpt)
+		b, err := build.NewBuilder(projectSvc, settingsSvc, v, build.WithArtifactStore(artStore), build.WithImageGC(os.Getenv("PIPEWRIGHT_NO_IMAGE_GC") != "1"), build.WithGitRefresher(gitRefresher), clonerOpt)
 		if err != nil {
 			log.Fatalf("[build] PIPEWRIGHT_BUILDER=real 但构建器不可用:%v", err)
 		}
 		log.Printf("[build] 真实隔离构建器已启用(容器 CLI=%s)", b.DriverBinary())
 		return []run.PoolOption{run.WithRunner(b)}
 	default:
-		b, err := build.NewBuilder(projectSvc, settingsSvc, v, build.WithArtifactStore(artStore), build.WithImageGC(os.Getenv("PIPEWRIGHT_NO_IMAGE_GC") != "1"), clonerOpt)
+		b, err := build.NewBuilder(projectSvc, settingsSvc, v, build.WithArtifactStore(artStore), build.WithImageGC(os.Getenv("PIPEWRIGHT_NO_IMAGE_GC") != "1"), build.WithGitRefresher(gitRefresher), clonerOpt)
 		if err != nil {
 			log.Printf("[build] 未探测到容器 CLI(docker/nerdctl/podman),回退桩 runner(PIPEWRIGHT_BUILDER=real 可强制要求真实):%v", err)
 			return nil

@@ -21,6 +21,7 @@ import (
 
 	"github.com/go-git/go-git/v5/storage/memory"
 	"github.com/huangchengsir/pipewright/internal/gitauth"
+	"github.com/huangchengsir/pipewright/internal/gitrefresh"
 	"github.com/huangchengsir/pipewright/internal/project"
 	"github.com/huangchengsir/pipewright/internal/vault"
 )
@@ -287,9 +288,10 @@ func cleanRelPath(p string) (string, bool) {
 
 // sourceDeps 聚合 source 端点所需服务(复用已注入 projects + vault + 注入的 SourceReader)。
 type sourceDeps struct {
-	projects project.Service
-	vault    vault.Vault
-	reader   SourceReader
+	projects  project.Service
+	vault     vault.Vault
+	reader    SourceReader
+	refresher gitrefresh.Refresher
 }
 
 // resolveSourceContext 取项目(repoUrl + 默认分支 + 凭据 token)与规范化 ref/path。
@@ -320,7 +322,7 @@ func (d sourceDeps) resolveSourceContext(w http.ResponseWriter, r *http.Request)
 	// 取仓库凭据(进程内取用即弃);取不到不致命 → 空 token 尝试(私有仓库会走克隆失败降级)。
 	username, token = "", ""
 	if d.vault != nil && strings.TrimSpace(proj.CredentialID) != "" {
-		if auth, terr := d.vault.GetGitAuth(proj.CredentialID); terr == nil {
+		if auth, terr := gitrefresh.Resolve(r.Context(), d.vault, d.refresher, proj.CredentialID); terr == nil {
 			username, token = auth.Username, auth.Token
 		}
 	}

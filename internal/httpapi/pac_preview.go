@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/huangchengsir/pipewright/internal/gitrefresh"
 	"github.com/huangchengsir/pipewright/internal/pipelineyaml"
 	"github.com/huangchengsir/pipewright/internal/project"
 )
@@ -80,7 +81,7 @@ func makePacPreviewHandler(d sourceDeps) http.HandlerFunc {
 		// 取仓库凭据(进程内取用即弃;取不到不致命 → 空 token 试公开仓库,与 pacloader 一致)。
 		username, token := "", ""
 		if d.vault != nil && strings.TrimSpace(proj.CredentialID) != "" {
-			if auth, terr := d.vault.GetGitAuth(proj.CredentialID); terr == nil {
+			if auth, terr := gitrefresh.Resolve(r.Context(), d.vault, d.refresher, proj.CredentialID); terr == nil {
 				username, token = auth.Username, auth.Token
 			}
 		}

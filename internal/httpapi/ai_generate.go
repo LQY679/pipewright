@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/huangchengsir/pipewright/internal/ai"
+	"github.com/huangchengsir/pipewright/internal/gitrefresh"
 	"github.com/huangchengsir/pipewright/internal/library"
 	"github.com/huangchengsir/pipewright/internal/pipeline"
 	"github.com/huangchengsir/pipewright/internal/project"
@@ -142,6 +143,7 @@ type aiGenerateDeps struct {
 	triggers    trigger.Service
 	vault       vault.Vault
 	customNodes library.CustomNodeService // 复用库自定义节点(动态拼入 AI 节点目录;可 nil)
+	refresher   gitrefresh.Refresher
 }
 
 // reasonAINotConfigured 是 AI 未配置时的友好引导(不阻断手动建项目;HTTP 200,available=false)。
@@ -186,7 +188,7 @@ func makeAIGenerateHandler(d aiGenerateDeps) http.HandlerFunc {
 		// 取仓库克隆 token(进程内取用即弃);取不到不致命 → 以空 token 尝试(多走降级)。
 		username, token := "", ""
 		if d.vault != nil && strings.TrimSpace(proj.CredentialID) != "" {
-			if auth, terr := d.vault.GetGitAuth(proj.CredentialID); terr == nil {
+			if auth, terr := gitrefresh.Resolve(ctx, d.vault, d.refresher, proj.CredentialID); terr == nil {
 				username, token = auth.Username, auth.Token
 			}
 		}
