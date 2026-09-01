@@ -16,6 +16,9 @@ export default {
     errLoadNotFound: '專案不存在,請確認專案 ID 正確。',
     errLoadFailed: '載入觸發設定失敗({status})',
     errLoadGeneric: '載入觸發設定失敗,請稍後重試。',
+    errSaveNotReady: '觸發設定尚未載入完成,此時儲存會清空既有映射,請稍候再試。',
+    errFixFields: '請先修正標紅的欄位(分支模式 / 環境名稱)後再儲存。',
+    envEmpty: '環境名稱不能為空',
 
     patternEmpty: '分支模式不能為空',
     patternSlash: '分支模式不能以 / 開頭或結尾',

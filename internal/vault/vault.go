@@ -126,6 +126,10 @@ type Vault interface {
 	// 供续期成功后写入新 token。expiresAt 为空(RFC3339 UTC)时保留既有过期时间。
 	// 空 accessToken → ErrEmptySecret。
 	RotateAccessToken(id string, accessToken, refreshToken, expiresAt string) error
+	// Configured 报告保险库是否已配置 master key(供调用方快速短路 / 友好降级)。
+	// 例:trigger 包在 vault 未就绪时,允许读取 / 保存与密钥无关的分支映射配置,
+	// 仅密钥的生成 / 重置仍返回 ErrVaultUnconfigured。
+	Configured() bool
 }
 
 // service 是 store 支撑的 Vault 实现。master key 为 nil 时为「未配置」态。
@@ -140,8 +144,8 @@ func New(db *sql.DB, key *[keySize]byte) Vault {
 	return &service{db: db, key: key}
 }
 
-// Configured 报告保险库是否已配置 master key(供 HTTP 层快速短路/友好提示)。
-func (s *service) configured() bool { return s.key != nil }
+// Configured 报告保险库是否已配置 master key(供 HTTP 层 / 调用方快速短路 / 友好降级)。
+func (s *service) Configured() bool { return s.key != nil }
 
 // validateType 校验类型枚举。
 func validateType(t string) error {
@@ -154,7 +158,7 @@ func validateType(t string) error {
 }
 
 func (s *service) Create(in CreateInput) (*Credential, error) {
-	if !s.configured() {
+	if !s.Configured() {
 		return nil, ErrVaultUnconfigured
 	}
 	if err := validateType(in.Type); err != nil {
@@ -210,7 +214,7 @@ func (s *service) Create(in CreateInput) (*Credential, error) {
 }
 
 func (s *service) List() ([]Credential, error) {
-	if !s.configured() {
+	if !s.Configured() {
 		return nil, ErrVaultUnconfigured
 	}
 	rows, err := s.db.Query(
@@ -237,7 +241,7 @@ func (s *service) List() ([]Credential, error) {
 }
 
 func (s *service) Get(id string) (string, error) {
-	if !s.configured() {
+	if !s.Configured() {
 		return "", ErrVaultUnconfigured
 	}
 	var sealed []byte
@@ -260,7 +264,7 @@ func (s *service) Get(id string) (string, error) {
 
 // Reveal 同 Get 但**不更新 last_used_at**(供脱敏登记等只读取值场景)。
 func (s *service) GetGitAuth(id string) (GitAuth, error) {
-	if !s.configured() {
+	if !s.Configured() {
 		return GitAuth{}, ErrVaultUnconfigured
 	}
 	var username string
@@ -282,7 +286,7 @@ func (s *service) GetGitAuth(id string) (GitAuth, error) {
 }
 
 func (s *service) Reveal(id string) (string, error) {
-	if !s.configured() {
+	if !s.Configured() {
 		return "", ErrVaultUnconfigured
 	}
 	var sealed []byte
@@ -301,7 +305,7 @@ func (s *service) Reveal(id string) (string, error) {
 }
 
 func (s *service) Exists(id string) (bool, error) {
-	if !s.configured() {
+	if !s.Configured() {
 		return false, ErrVaultUnconfigured
 	}
 	var one int
@@ -316,7 +320,7 @@ func (s *service) Exists(id string) (bool, error) {
 }
 
 func (s *service) Update(id string, in UpdateInput) (*Credential, error) {
-	if !s.configured() {
+	if !s.Configured() {
 		return nil, ErrVaultUnconfigured
 	}
 
@@ -381,7 +385,7 @@ func (s *service) Update(id string, in UpdateInput) (*Credential, error) {
 }
 
 func (s *service) Delete(id string) error {
-	if !s.configured() {
+	if !s.Configured() {
 		return ErrVaultUnconfigured
 	}
 	// 在用守卫:被流水线配置(spec_json/secret/步骤)或画布 stages 引用的凭据不可删,
@@ -420,14 +424,14 @@ func isConstraintErr(err error) bool {
 }
 
 func (s *service) SealSecret(plaintext []byte) ([]byte, error) {
-	if !s.configured() {
+	if !s.Configured() {
 		return nil, ErrVaultUnconfigured
 	}
 	return seal(s.key, plaintext)
 }
 
 func (s *service) OpenSecret(sealed []byte) ([]byte, error) {
-	if !s.configured() {
+	if !s.Configured() {
 		return nil, ErrVaultUnconfigured
 	}
 	return open(s.key, sealed)
@@ -435,7 +439,7 @@ func (s *service) OpenSecret(sealed []byte) ([]byte, error) {
 
 // RefreshContext 返回 OAuth 凭据的刷新上下文(provider + 解密后的 refresh_token)。
 func (s *service) RefreshContext(id string) (string, string, error) {
-	if !s.configured() {
+	if !s.Configured() {
 		return "", "", ErrVaultUnconfigured
 	}
 	var name string
@@ -473,7 +477,7 @@ func oauthProviderFromName(name string) string {
 // RotateAccessToken 轮换 OAuth access_token(及可选的新 refresh_token / 新过期时间)落库。
 // expiresAt 为空时保留既有过期时间(平台未返回 expires_in 的兜底,不清空判断依据)。
 func (s *service) RotateAccessToken(id string, accessToken, refreshToken, expiresAt string) error {
-	if !s.configured() {
+	if !s.Configured() {
 		return ErrVaultUnconfigured
 	}
 	if strings.TrimSpace(accessToken) == "" {
@@ -525,7 +529,7 @@ func (s *service) RotateAccessToken(id string, accessToken, refreshToken, expire
 // AccessExpiry 返回 OAuth access_token 的过期时间(由 expires_in 换算并落库)。
 // nil = 未知(存量凭据或平台未返回 expires_in),续期逻辑按「首次使用刷新一次并补记」处理。
 func (s *service) AccessExpiry(id string) (*time.Time, error) {
-	if !s.configured() {
+	if !s.Configured() {
 		return nil, ErrVaultUnconfigured
 	}
 	var raw sql.NullString

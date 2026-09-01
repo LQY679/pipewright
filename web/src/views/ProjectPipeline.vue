@@ -274,6 +274,10 @@ async function handleSave(): Promise<void> {
       saveBanner.value = err.status === 0
         ? t('projectPipeline.errNoServer')
         : mapSaveError(err)
+    } else if (err instanceof Error && err.message) {
+      // 子面板(如 TriggersPanel)抛出的本地校验/守卫错误,直接透传其文案,
+      // 避免顶栏显示泛化的「保存失败」而丢失真实原因。
+      saveBanner.value = err.message
     } else {
       saveBanner.value = t('projectPipeline.errSaveFailedRetry')
     }

@@ -16,6 +16,9 @@ export default {
     errLoadNotFound: 'Projekt existiert nicht; prüfen Sie, ob die Projekt-ID korrekt ist.',
     errLoadFailed: 'Laden der Auslöser-Einstellungen fehlgeschlagen ({status})',
     errLoadGeneric: 'Laden der Auslöser-Einstellungen fehlgeschlagen, bitte später erneut versuchen.',
+    errSaveNotReady: 'Die Auslöser-Einstellungen werden noch geladen. Ein Speichern jetzt würde bestehende Zuordnungen löschen – bitte kurz warten und erneut versuchen.',
+    errFixFields: 'Bitte korrigieren Sie die markierten Felder (Branch-Muster / Umgebungsname), bevor Sie speichern.',
+    envEmpty: 'Umgebungsname darf nicht leer sein',
 
     patternEmpty: 'Branch-Muster darf nicht leer sein',
     patternSlash: 'Branch-Muster darf nicht mit / beginnen oder enden',

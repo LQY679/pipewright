@@ -294,9 +294,17 @@ func (s *service) createDefault(ctx context.Context, projectID string) (*Config,
 	if err != nil {
 		return nil, err
 	}
-	_, sealed, masked, err := s.newSecret()
-	if err != nil {
-		return nil, err
+
+	// vault 未就绪(master key 缺失)时,跳过签名密钥生成:密文留空、掩码用占位。
+	// 分支映射 / 事件 / 策略等非密钥配置仍照常落库可用;密钥在 vault 就绪后
+	// 经 ResetSecret 重新生成。已配置 vault 则正常生成并加密密钥。
+	var sealed []byte
+	masked := placeholderMask()
+	if s.vaultReady() {
+		_, sealed, masked, err = s.newSecret()
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	now := time.Now().UTC()
@@ -375,24 +383,44 @@ func (s *service) newSecret() (secret string, sealed []byte, masked string, err 
 	return secret, sealed, maskSecret(secret), nil
 }
 
-// maskSealed 解密密文并算掩码;明文用完即弃。vault 未配置 → ErrVaultUnconfigured。
+// vaultReady 报告 vault 是否可用于加解密:非 nil 且已配置 master key。
+// 未就绪时,与密钥无关的读取 / 写入(分支映射、事件、策略)仍可正常工作,
+// 仅密钥的生成 / 重置会明确报错(ErrVaultUnconfigured)。
+func (s *service) vaultReady() bool {
+	return s.vault != nil && s.vault.Configured()
+}
+
+// maskSealed 解密密文并算掩码;明文用完即弃。
+//
+// 降级:master key 未配置(vault 未就绪)或密文为空时,返回确定性占位掩码
+// (whsec_••••)而非报错,使 GET / 分支映射等「非密钥」配置照常可读写,
+// 平台不 panic。密钥的生成 / 重置仍由 newSecret 明确返回 ErrVaultUnconfigured。
 func (s *service) maskSealed(sealed []byte) (string, error) {
-	if s.vault == nil {
-		return "", ErrVaultUnconfigured
+	if len(sealed) == 0 {
+		return placeholderMask(), nil
+	}
+	if !s.vaultReady() {
+		return placeholderMask(), nil
 	}
 	plain, err := s.vault.OpenSecret(sealed)
 	if err != nil {
 		if errors.Is(err, vault.ErrVaultUnconfigured) {
-			return "", ErrVaultUnconfigured
+			return placeholderMask(), nil
 		}
 		// 解密失败(错误 master key / 篡改):不泄漏细节,按未配置态处理。
-		return "", ErrVaultUnconfigured
+		return placeholderMask(), nil
 	}
 	masked := maskSecret(string(plain))
 	for i := range plain {
 		plain[i] = 0 // 明文用完清零
 	}
 	return masked, nil
+}
+
+// placeholderMask 返回 vault 未配置 / 无密钥记录时的确定性占位掩码。
+// 不含任何真实密钥信息,仅用于 UI 展示「密钥已设置(但未解密)」状态。
+func placeholderMask() string {
+	return secretPrefix + "••••"
 }
 
 // maskSecret 生成签名密钥掩码:保留 whsec_ 前缀 + 末 4 位,中间点掩码。

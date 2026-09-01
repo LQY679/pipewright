@@ -16,6 +16,9 @@ export default {
     errLoadNotFound: 'Le projet n’existe pas ; vérifiez que l’ID du projet est correct.',
     errLoadFailed: 'Échec du chargement de la configuration des déclencheurs ({status})',
     errLoadGeneric: 'Échec du chargement de la configuration des déclencheurs, réessayez plus tard.',
+    errSaveNotReady: 'La configuration des déclencheurs est encore en cours de chargement. Enregistrer maintenant effacerait les mappages existants — patientez puis réessayez.',
+    errFixFields: 'Corrigez les champs signalés (modèle de branche / nom d’environnement) avant d’enregistrer.',
+    envEmpty: 'Le nom d’environnement est obligatoire',
 
     patternEmpty: 'Le motif de branche ne peut pas être vide',
     patternSlash: 'Le motif de branche ne peut pas commencer ni finir par /',

@@ -16,6 +16,9 @@ export default {
     errLoadNotFound: 'El proyecto no existe; verifica que el ID del proyecto sea correcto.',
     errLoadFailed: 'Error al cargar la configuración de disparadores ({status})',
     errLoadGeneric: 'Error al cargar la configuración de disparadores, inténtalo de nuevo más tarde.',
+    errSaveNotReady: 'La configuración de disparadores aún se está cargando. Guardar ahora borraría los mapeos existentes; espera un momento y reinténtalo.',
+    errFixFields: 'Corrige los campos marcados (patrón de rama / nombre de entorno) antes de guardar.',
+    envEmpty: 'El nombre del entorno es obligatorio',
 
     patternEmpty: 'El patrón de rama no puede estar vacío',
     patternSlash: 'El patrón de rama no puede empezar ni terminar con /',

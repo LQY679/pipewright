@@ -16,6 +16,9 @@ export default {
     errLoadNotFound: '프로젝트가 존재하지 않습니다. 프로젝트 ID가 올바른지 확인하세요.',
     errLoadFailed: '트리거 설정 로딩 실패({status})',
     errLoadGeneric: '트리거 설정 로딩에 실패했습니다. 잠시 후 다시 시도하세요.',
+    errSaveNotReady: '트리거 설정이 아직 로드 중입니다. 지금 저장하면 기존 매핑이 삭제됩니다. 잠시 후 다시 시도하세요.',
+    errFixFields: '강조 표시된 항목(브랜치 패턴 / 환경 이름)을 수정한 후 저장하세요.',
+    envEmpty: '환경 이름은 필수입니다',
 
     patternEmpty: '브랜치 패턴은 비울 수 없습니다',
     patternSlash: '브랜치 패턴은 /로 시작하거나 끝날 수 없습니다',

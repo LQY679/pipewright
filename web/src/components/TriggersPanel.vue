@@ -58,6 +58,7 @@ interface MappingRow {
   environment: string
   targetServerIds: string[]
   patternError: string
+  envError: string
 }
 
 let _keySeq = 0
@@ -182,8 +183,16 @@ function validatePattern(pattern: string): string {
   return ''
 }
 
+/**
+ * 环境名必填:它是消费侧的解析键(webhook 匹配 + envresolver 补解析)。
+ * 留空会让分支匹配成功却解析不到环境,表现为「配了规则但从不生效」。
+ */
+function validateEnvironment(env: string): string {
+  return env.trim() ? '' : t('projectPanels.triggers.envEmpty')
+}
+
 function addRow(): void {
-  mappings.value.push({ _key: ++_keySeq, branchPattern: '', environment: '', targetServerIds: [], patternError: '' })
+  mappings.value.push({ _key: ++_keySeq, branchPattern: '', environment: '', targetServerIds: [], patternError: '', envError: '' })
 }
 
 function removeRow(key: number): void {
@@ -192,6 +201,10 @@ function removeRow(key: number): void {
 
 function onPatternInput(row: MappingRow): void {
   if (row.patternError) row.patternError = validatePattern(row.branchPattern)
+}
+
+function onEnvInput(row: MappingRow): void {
+  if (row.envError) row.envError = validateEnvironment(row.environment)
 }
 
 // ─── Save ─────────────────────────────────────────────────────────────────────
@@ -207,43 +220,82 @@ function showSaveSuccess(): void {
   saveSuccessTimer = setTimeout(() => { saveSuccess.value = false }, 3200)
 }
 
-async function handleSave(): Promise<void> {
+/** 把保存失败原因翻成面板内 banner 文案(Error.message 优先,便于宿主透传)。 */
+function describeSaveError(err: unknown): string {
+  if (err instanceof HttpError) {
+    if (err.status === 0) {
+      return t('projectPanels.triggers.errSaveConnect')
+    }
+    if (err.status === 400 || err.status === 422) {
+      return err.apiError?.message ?? t('projectPanels.triggers.errSaveInvalid', { status: err.status })
+    }
+    return err.apiError?.message ?? t('projectPanels.triggers.errSaveFailed', { status: err.status })
+  }
+  if (err instanceof Error && err.message) return err.message
+  return t('projectPanels.triggers.errSaveGeneric')
+}
+
+/**
+ * 保存核心:校验 → PUT → 用服务端返回值回写表单。
+ * 失败一律 throw,由调用方决定呈现方式(面板内 banner / 宿主页面顶栏)。
+ */
+async function saveCore(): Promise<void> {
+  // 配置尚未就绪(仍在加载 / 加载失败)时拒绝保存:
+  // 此刻 mappings 为空,盲发 PUT 会把库里已有的分支映射清空。
+  if (loadState.value !== 'idle') {
+    throw new Error(t('projectPanels.triggers.errSaveNotReady'))
+  }
+
   let hasError = false
   for (const row of mappings.value) {
     row.patternError = validatePattern(row.branchPattern)
-    if (row.patternError) hasError = true
+    row.envError = validateEnvironment(row.environment)
+    if (row.patternError || row.envError) hasError = true
   }
-  if (hasError) return
+  if (hasError) {
+    throw new Error(t('projectPanels.triggers.errFixFields'))
+  }
 
+  const updated = await saveTrigger(props.projectId, {
+    events: { push: eventPush.value, tag: eventTag.value, pullRequest: eventPullRequest.value, release: eventRelease.value },
+    branchMappings: mappings.value.map((r) => ({
+      // 回传 id 让后端保留行标识;否则每行每次保存都会换新 UUID(删旧建新)。
+      id: r.id,
+      branchPattern: r.branchPattern.trim(),
+      environment:   r.environment.trim(),
+      targetServerIds: r.targetServerIds,
+    })),
+    unmatchedPolicy: unmatchedPolicy.value,
+    pathFilters: parsePathFilters(pathFiltersText.value),
+  })
+  applyConfig(updated)
+}
+
+/** 面板内保存入口:吞掉错误,写入自己的 banner 与成功提示。 */
+async function handleSave(): Promise<void> {
   saveSubmitting.value = true
   saveBanner.value = ''
   saveSuccess.value = false
-
   try {
-    const updated = await saveTrigger(props.projectId, {
-      events: { push: eventPush.value, tag: eventTag.value, pullRequest: eventPullRequest.value, release: eventRelease.value },
-      branchMappings: mappings.value.map((r) => ({
-        branchPattern: r.branchPattern.trim(),
-        environment:   r.environment.trim(),
-        targetServerIds: r.targetServerIds,
-      })),
-      unmatchedPolicy: unmatchedPolicy.value,
-      pathFilters: parsePathFilters(pathFiltersText.value),
-    })
-    applyConfig(updated)
+    await saveCore()
     showSaveSuccess()
   } catch (err) {
-    if (err instanceof HttpError) {
-      if (err.status === 0) {
-        saveBanner.value = t('projectPanels.triggers.errSaveConnect')
-      } else if (err.status === 400 || err.status === 422) {
-        saveBanner.value = err.apiError?.message ?? t('projectPanels.triggers.errSaveInvalid', { status: err.status })
-      } else {
-        saveBanner.value = err.apiError?.message ?? t('projectPanels.triggers.errSaveFailed', { status: err.status })
-      }
-    } else {
-      saveBanner.value = t('projectPanels.triggers.errSaveGeneric')
-    }
+    saveBanner.value = describeSaveError(err)
+  } finally {
+    saveSubmitting.value = false
+  }
+}
+
+/**
+ * 宿主页面(ProjectPipeline 顶栏「保存草稿」)入口:与面板内按钮共用 saveCore,
+ * 但把错误透传出去 —— 宿主据此跳过「保存成功」提示,
+ * 避免面板内报红、顶栏却报喜的矛盾反馈。
+ */
+async function saveForHost(): Promise<void> {
+  saveSubmitting.value = true
+  saveBanner.value = ''
+  try {
+    await saveCore()
   } finally {
     saveSubmitting.value = false
   }
@@ -267,6 +319,7 @@ function applyConfig(config: TriggerConfig): void {
     environment: m.environment,
     targetServerIds: m.targetServerIds,
     patternError: '',
+    envError: '',
   }))
 }
 
@@ -309,7 +362,7 @@ const displayWebhookUrl = computed(() => {
 
 // 暴露保存动作,供宿主页面复用:ProjectPipeline 顶栏的"保存草稿"在 triggers tab
 // 下通过 ref 调它,保证顶栏与面板内两个保存入口走的是同一份逻辑(不会漏存)。
-defineExpose({ save: handleSave })
+defineExpose({ save: saveForHost })
 </script>
 
 <template>
@@ -498,7 +551,8 @@ defineExpose({ save: handleSave })
             <span v-if="row.patternError" class="map-field-error" role="alert">{{ row.patternError }}</span>
           </div>
           <div class="map-cell">
-            <input v-model="row.environment" type="text" class="map-input" :placeholder="t('projectPanels.triggers.envPlaceholder')" :aria-label="t('projectPanels.triggers.envNameAria', { key: row._key })"/>
+            <input v-model="row.environment" type="text" class="map-input" :class="{ 'map-input--error': row.envError }" :placeholder="t('projectPanels.triggers.envPlaceholder')" :aria-label="t('projectPanels.triggers.envNameAria', { key: row._key })" :aria-invalid="row.envError ? 'true' : undefined" @input="onEnvInput(row)" @blur="row.envError = validateEnvironment(row.environment)"/>
+            <span v-if="row.envError" class="map-field-error" role="alert">{{ row.envError }}</span>
           </div>
           <div class="map-cell map-cell--servers">
             <div class="servers-placeholder" :aria-label="t('projectPanels.triggers.serversPlaceholderAria')">

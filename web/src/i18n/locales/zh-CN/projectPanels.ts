@@ -17,6 +17,9 @@ export default {
     errLoadNotFound: '项目不存在,请确认项目 ID 正确。',
     errLoadFailed: '加载触发配置失败({status})',
     errLoadGeneric: '加载触发配置失败,请稍后重试。',
+    errSaveNotReady: '触发配置尚未加载完成,此时保存会清空已有映射,请稍候再试。',
+    errFixFields: '请先修正标红的字段(分支模式 / 环境名称)后再保存。',
+    envEmpty: '环境名称不能为空',
 
     // Pattern validation
     patternEmpty: '分支模式不能为空',

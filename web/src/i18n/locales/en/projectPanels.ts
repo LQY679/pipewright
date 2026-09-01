@@ -16,6 +16,9 @@ export default {
     errLoadNotFound: 'Project not found; please verify the project ID is correct.',
     errLoadFailed: 'Failed to load trigger settings ({status})',
     errLoadGeneric: 'Failed to load trigger settings, please try again later.',
+    errSaveNotReady: 'Trigger settings are still loading. Saving now would wipe existing mappings — please wait and retry.',
+    errFixFields: 'Please fix the highlighted fields (branch pattern / environment name) before saving.',
+    envEmpty: 'Environment name is required',
 
     patternEmpty: 'Branch pattern cannot be empty',
     patternSlash: 'Branch pattern cannot start or end with /',

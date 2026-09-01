@@ -305,9 +305,11 @@ func TestResetVaultUnconfigured(t *testing.T) {
 	projID := seedProject(t, db)
 	// vault 未配置 master key。
 	svc := New(db, vault.New(db, nil))
-	if _, err := svc.Get(context.Background(), projID); err != ErrVaultUnconfigured {
-		t.Fatalf("Get err = %v, want ErrVaultUnconfigured", err)
+	// 降级:master key 缺失时,非密钥配置(分支映射等)仍可读 —— Get 不应报错。
+	if _, err := svc.Get(context.Background(), projID); err != nil {
+		t.Fatalf("Get err = %v, want nil (分支映射降级可读)", err)
 	}
+	// 但密钥的生成 / 重置仍明确依赖 vault —— ResetSecret 必须返回 ErrVaultUnconfigured。
 	if _, err := svc.ResetSecret(context.Background(), projID); err != ErrVaultUnconfigured {
 		t.Fatalf("Reset err = %v, want ErrVaultUnconfigured", err)
 	}
@@ -352,4 +354,48 @@ func readCipher(t *testing.T, db *sql.DB, projID string) []byte {
 		t.Fatalf("read cipher: %v", err)
 	}
 	return c
+}
+
+// TestTriggerVaultUnconfiguredDegrades 验证:master key 缺失(vault 未就绪)时,
+// 分支映射 / 事件 / 策略等「非密钥」配置仍可正常读写,而密钥的生成 / 重置仍明确报错。
+func TestTriggerVaultUnconfiguredDegrades(t *testing.T) {
+	db, _ := testDB(t)
+	projID := seedProject(t, db)
+	svc := New(db, vault.New(db, nil)) // 无 master key → vault 未就绪
+
+	// 1) 懒加载默认:Get 成功(降级核心是「非密钥配置可读」,不再 422)。
+	cfg, err := svc.Get(context.Background(), projID)
+	if err != nil {
+		t.Fatalf("Get: %v, want nil", err)
+	}
+	if cfg.WebhookSecretMasked != placeholderMask() {
+		t.Fatalf("降级掩码 = %q, want %q", cfg.WebhookSecretMasked, placeholderMask())
+	}
+
+	// 2) 保存分支映射:成功(不触碰密钥列,可空)。
+	saved, err := svc.Save(context.Background(), projID, SaveInput{
+		Events:        Events{Push: true},
+		BranchMappings: []BranchMapping{{BranchPattern: "main", Environment: "生产"}},
+		UnmatchedPolicy: "ignore",
+	})
+	if err != nil {
+		t.Fatalf("Save: %v, want nil", err)
+	}
+	if len(saved.BranchMappings) != 1 {
+		t.Fatalf("保存后映射数 = %d, want 1", len(saved.BranchMappings))
+	}
+
+	// 3) 再次 Get:分支映射已落库、掩码仍为占位。
+	again, err := svc.Get(context.Background(), projID)
+	if err != nil {
+		t.Fatalf("Get 再次: %v", err)
+	}
+	if len(again.BranchMappings) != 1 {
+		t.Fatalf("再次 Get 映射数 = %d, want 1", len(again.BranchMappings))
+	}
+
+	// 4) 密钥重置仍明确返回 ErrVaultUnconfigured(涉及密钥,不降级)。
+	if _, err := svc.ResetSecret(context.Background(), projID); err != ErrVaultUnconfigured {
+		t.Fatalf("ResetSecret err = %v, want ErrVaultUnconfigured", err)
+	}
 }
