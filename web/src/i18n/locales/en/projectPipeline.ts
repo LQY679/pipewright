@@ -64,6 +64,8 @@ export default {
 
   // ─── save errors ────────────────────────────────────────────────
   errSaveFailedRetry: 'Save failed. Please try again later.',
+  errUnhandledTab: 'This tab ("{tab}") has no save handler wired up, so nothing was saved. This is a bug.',
+  errTriggerPanelUnready: 'The trigger panel is still loading. Please wait a moment and try again.',
   errSaveFailedStatus: 'Save failed ({status})',
   errInvalidStage: 'Stage name cannot be empty and kind must be an allowed value. Please check and try again.',
   errInvalidJob: 'Job name or type cannot be empty. Please complete them and try again.',

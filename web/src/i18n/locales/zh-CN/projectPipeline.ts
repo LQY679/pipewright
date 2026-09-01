@@ -64,6 +64,8 @@ export default {
 
   // ─── 保存错误 ───────────────────────────────────────────────────
   errSaveFailedRetry: '保存失败,请稍后重试。',
+  errUnhandledTab: '当前页签"{tab}"未接入保存逻辑,本次未保存任何内容,属于程序缺陷。',
+  errTriggerPanelUnready: '触发设置面板尚未加载完成,请稍候再试。',
   errSaveFailedStatus: '保存失败({status})',
   errInvalidStage: '阶段名不能为空或 kind 不在允许值内,请检查后重试。',
   errInvalidJob: '任务名称或类型不能为空,请补充后重试。',

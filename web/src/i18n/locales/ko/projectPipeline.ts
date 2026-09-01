@@ -64,6 +64,8 @@ export default {
 
   // ─── 저장 오류 ──────────────────────────────────────────────────
   errSaveFailedRetry: '저장에 실패했습니다. 잠시 후 다시 시도하세요.',
+  errUnhandledTab: '탭 "{tab}"에 저장 처리가 연결되지 않아 아무것도 저장되지 않았습니다(버그입니다).',
+  errTriggerPanelUnready: '트리거 설정 패널이 아직 로드 중입니다. 잠시 후 다시 시도하세요.',
   errSaveFailedStatus: '저장 실패({status})',
   errInvalidStage: '스테이지 이름은 비워 둘 수 없으며 kind는 허용된 값이어야 합니다. 확인 후 다시 시도하세요.',
   errInvalidJob: '작업 이름 또는 유형은 비워 둘 수 없습니다. 입력 후 다시 시도하세요.',

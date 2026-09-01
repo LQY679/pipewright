@@ -163,6 +163,12 @@ const saveBanner     = ref('')
 const saveSuccess    = ref(false)
 let saveSuccessTimer: ReturnType<typeof setTimeout> | null = null
 
+/**
+ * 触发设置面板实例。顶栏"保存草稿"在 triggers tab 下直接复用面板自身的保存逻辑,
+ * 避免只保存了编排(spec)却漏掉触发设置(分支映射 / 事件 / 未匹配策略)。
+ */
+const triggersPanelRef = ref<InstanceType<typeof TriggersPanel> | null>(null)
+
 function showSaveSuccess(): void {
   saveSuccess.value = true
   if (saveSuccessTimer) clearTimeout(saveSuccessTimer)
@@ -230,7 +236,8 @@ async function handleSave(): Promise<void> {
   saveSuccess.value    = false
 
   try {
-    // The vars/envs tabs persist build/deploy settings; canvas/triggers persist the spec.
+    // The vars/envs tabs persist build/deploy settings; canvas persists the spec.
+    // Each tab owns its own save target — every branch must dispatch explicitly.
     if (activeTab.value === 'vars' || activeTab.value === 'envs') {
       const payload = buildSettingsPayload()
       if (payload) {
@@ -239,9 +246,25 @@ async function handleSave(): Promise<void> {
         // Refresh credential masks in case a referenced credential changed.
         credentials.value = await listCredentials().catch(() => credentials.value)
       }
-    } else {
+    } else if (activeTab.value === 'triggers') {
+      // 触发设置由 TriggersPanel 自己持有状态(分支映射 / 事件 / 未匹配策略),
+      // 复用它暴露的 save(),保证顶栏与面板内两个入口行为一致。
+      const panel = triggersPanelRef.value
+      if (!panel) {
+        saveBanner.value = t('projectPipeline.errTriggerPanelUnready')
+        return
+      }
+      await panel.save()
+    } else if (activeTab.value === 'canvas') {
       const dto = await savePipeline(projectId.value, { stages: editStages.value })
       applyPipeline(dto)
+    } else {
+      // 兜底:新增了 tab 类型却忘记在此分发保存 → 开发期立即暴露,
+      // 而不是静默"保存成功却不生效"。(下面这行的 never 标注会在漏分发时报编译错)
+      const unhandled: never = activeTab.value
+      console.warn(`[ProjectPipeline] handleSave: 未分发保存的 tab 类型 "${String(unhandled)}"`)
+      saveBanner.value = t('projectPipeline.errUnhandledTab', { tab: String(unhandled) })
+      return
     }
     showSaveSuccess()
     // Revalidate after a successful save (debounced, only when panel is open).
@@ -701,7 +724,7 @@ async function togglePrStatus(next: boolean): Promise<void> {
           aria-labelledby="tab-triggers"
         >
           <div class="triggers-stack">
-            <TriggersPanel :project-id="projectId" />
+            <TriggersPanel ref="triggersPanelRef" :project-id="projectId" />
             <!-- R4 / E4.1: 每项目 PR 预览环境配置 -->
             <ProjectPreviewConfig :project-id="projectId" />
           </div>

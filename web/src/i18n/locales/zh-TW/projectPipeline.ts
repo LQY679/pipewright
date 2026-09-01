@@ -64,6 +64,8 @@ export default {
 
   // ─── 儲存錯誤 ───────────────────────────────────────────────────
   errSaveFailedRetry: '儲存失敗,請稍後重試。',
+  errUnhandledTab: '目前頁籤「{tab}」未接入儲存邏輯,本次未儲存任何內容,屬於程式缺陷。',
+  errTriggerPanelUnready: '觸發設定面板尚未載入完成,請稍候再試。',
   errSaveFailedStatus: '儲存失敗({status})',
   errInvalidStage: '階段名稱不能為空或 kind 不在允許值內,請檢查後重試。',
   errInvalidJob: '任務名稱或類型不能為空,請補充後重試。',

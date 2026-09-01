@@ -306,6 +306,10 @@ const displayWebhookUrl = computed(() => {
   if (webhookUrl.value.startsWith('/')) return window.location.origin + webhookUrl.value
   return webhookUrl.value
 })
+
+// 暴露保存动作,供宿主页面复用:ProjectPipeline 顶栏的"保存草稿"在 triggers tab
+// 下通过 ref 调它,保证顶栏与面板内两个保存入口走的是同一份逻辑(不会漏存)。
+defineExpose({ save: handleSave })
 </script>
 
 <template>
@@ -509,10 +513,22 @@ const displayWebhookUrl = computed(() => {
           </div>
         </div>
         <div v-if="mappings.length === 0" class="map-empty"><span>{{ t('projectPanels.triggers.noMappings') }}</span></div>
-        <button class="add-row-btn" @click="addRow">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-          {{ t('projectPanels.triggers.addMapping') }}
-        </button>
+        <div class="map-actions">
+          <button class="add-row-btn" @click="addRow">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            {{ t('projectPanels.triggers.addMapping') }}
+          </button>
+          <!-- 顶部保存入口:与底部保存条共用 handleSave,改完分支映射不必滚到页面底部 -->
+          <button
+            class="btn-primary btn-primary--compact"
+            :disabled="saveSubmitting"
+            :aria-busy="saveSubmitting"
+            @click="handleSave"
+          >
+            <span v-if="saveSubmitting" class="spinner" aria-hidden="true"/>
+            {{ saveSubmitting ? t('projectPanels.triggers.saving') : t('projectPanels.triggers.saveTriggers') }}
+          </button>
+        </div>
         <p class="map-note">{{ t('projectPanels.triggers.mappingNotePrefix') }}<code class="mono">release/*</code> {{ t('projectPanels.triggers.mappingNoteSuffix') }}</p>
       </section>
 
@@ -724,6 +740,10 @@ const displayWebhookUrl = computed(() => {
 .map-empty { padding: 20px 18px; font-size: 0.82rem; color: var(--color-faint); font-style: italic; border-bottom: 1px solid var(--color-border); text-align: center; }
 .add-row-btn { display: flex; align-items: center; gap: 7px; padding: 12px 18px; width: 100%; border: none; background: transparent; color: var(--color-primary); font-family: var(--font-sans); font-size: 0.8rem; font-weight: 500; cursor: pointer; text-align: left; transition: color var(--duration-fast), background-color var(--duration-fast); border-top: 1px solid var(--color-border); }
 .add-row-btn:hover { background: var(--color-inset); }
+/* 顶部操作行:左"添加分支映射"(次级)+ 右"保存触发配置"(主),无需滚到底部即可保存 */
+.map-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 18px; border-top: 1px solid var(--color-border); }
+.map-actions .add-row-btn { width: auto; padding: 10px 0; border-top: none; flex: 0 1 auto; }
+.btn-primary--compact { height: 30px; padding: 0 13px; font-size: 0.79rem; box-shadow: none; flex: none; }
 .map-note { padding: 12px 18px 14px; font-size: 0.76rem; color: var(--color-faint); line-height: 1.6; border-top: 1px solid var(--color-border); }
 .map-note code { color: var(--color-cyan); }
 

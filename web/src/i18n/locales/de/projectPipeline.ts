@@ -64,6 +64,8 @@ export default {
 
   // ─── Speicherfehler ─────────────────────────────────────────────
   errSaveFailedRetry: 'Speichern fehlgeschlagen. Bitte versuchen Sie es später erneut.',
+  errUnhandledTab: 'Für diesen Tab („{tab}") ist keine Speicherlogik angebunden, es wurde nichts gespeichert. Dies ist ein Fehler.',
+  errTriggerPanelUnready: 'Das Trigger-Panel wird noch geladen. Bitte kurz warten und erneut versuchen.',
   errSaveFailedStatus: 'Speichern fehlgeschlagen ({status})',
   errInvalidStage: 'Der Phasenname darf nicht leer sein und kind muss ein zulässiger Wert sein. Bitte prüfen und erneut versuchen.',
   errInvalidJob: 'Job-Name oder -Typ dürfen nicht leer sein. Bitte ergänzen und erneut versuchen.',
