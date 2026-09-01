@@ -132,6 +132,11 @@ type Service interface {
 	// 无可发布产物 → ErrArtifactNotFound;服务器不存在 → ErrServerNotFound;有目标失败 → 返回 error
 	// 令该阶段失败、阻断下游(复用 dagrun「阶段失败→下游不执行」)。
 	DeployForStage(ctx context.Context, runID string, serverIDs []string, cfg map[string]string, strategy string) ([]TargetResult, error)
+
+	// Probe 在指定目标机上独立做一次健康探测(供流水线 health_check 节点真实执行门控)。
+	// 复用与部署后门控相同的探测链路(同一条 target.Exec);探测失败返回人读 error,
+	// 调用方据其阻断阶段。serverID 不存在 / 探测类型非法 → 上抛定位错误。
+	Probe(ctx context.Context, serverID string, hc *HealthCheck) error
 }
 
 // service 是 run + target 支撑的 Service 实现。
@@ -679,7 +684,7 @@ func (s *service) deployOne(ctx context.Context, srv *target.Server, a run.Artif
 
 	// 部署命令全部成功 → 若配置了健康检查,做部署后健康门控(Story 4.3 / FR-12)。
 	// 探测在部署命令成功之后跑;每机独立;经同一 target.Exec 链路(array 不拼 shell)。
-	if hc.enabled() {
+	if hc.Enabled() {
 		if herr := s.runHealthCheck(execCtx, srv.ID, hc); herr != nil {
 			finish := time.Now().UTC()
 			res.Status = run.TargetFailed

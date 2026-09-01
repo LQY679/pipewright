@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/anmitsu/go-shlex"
 	"github.com/huangchengsir/pipewright/internal/dag"
 	"github.com/huangchengsir/pipewright/internal/dagrun"
 	"github.com/huangchengsir/pipewright/internal/deploy"
@@ -197,7 +198,9 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 		buildImageJobs := make([]pipeline.Job, 0, len(stage.Jobs))
 		deployJobs := make([]pipeline.Job, 0, len(stage.Jobs))
 		notifyJobs := make([]pipeline.Job, 0, len(stage.Jobs))
+		healthCheckJobs := make([]pipeline.Job, 0, len(stage.Jobs))
 		hasPushJob := false
+		hasHealthCheckJob := false
 		for _, jb := range stage.Jobs {
 			switch {
 			case isScriptJob(jb.Type):
@@ -210,12 +213,15 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 				deployJobs = append(deployJobs, jb)
 			case strings.TrimSpace(jb.Type) == "notify":
 				notifyJobs = append(notifyJobs, jb)
+			case strings.TrimSpace(jb.Type) == "health_check":
+				hasHealthCheckJob = true
+				healthCheckJobs = append(healthCheckJobs, jb)
 			}
 		}
 
 		needsBuild := len(scriptJobs) > 0 || len(buildImageJobs) > 0
-		// 没有任何可执行节点(script/build_image/deploy_ssh/notify)且无 post → 诚实占位放行。
-		if !needsBuild && len(deployJobs) == 0 && len(notifyJobs) == 0 && len(stage.Post) == 0 {
+		// 没有任何可执行节点(script/build_image/deploy_ssh/notify/health_check)且无 post → 诚实占位放行。
+		if !needsBuild && len(deployJobs) == 0 && len(notifyJobs) == 0 && !hasHealthCheckJob && len(stage.Post) == 0 {
 			// 纯 git_source 阶段不触发构建克隆,「提交:构建阶段克隆时解析 HEAD」永远无法兑现;
 			// 这里对首个 git_source 节点 best-effort 浅克隆一次解析 HEAD,把提交作者/时间/备注
 			// 打进该节点日志(与构建阶段克隆同一仓库/分支;失败仅记日志,绝不阻断阶段放行)。
@@ -412,6 +418,19 @@ func NewStageExecutor(b *Builder, reportSink TestReportSink) dagrun.StageExecuto
 				_ = rep.JobDone(ctx, jb.ID, run.StepSuccess)
 			}
 
+			// ── 健康门控节点(health_check):真实探测,失败阻断阶段 ──
+			for _, jb := range healthCheckJobs {
+				if canceled(ctx) {
+					return run.ErrCanceled
+				}
+				_ = rep.JobRunning(ctx, jb.ID)
+				if err := b.runHealthCheckJob(ctx, rep.JobReporter(jb.ID), jb); err != nil {
+					_ = rep.JobDone(ctx, jb.ID, run.StepFailed)
+					return err
+				}
+				_ = rep.JobDone(ctx, jb.ID, run.StepSuccess)
+			}
+
 			return nil
 		}()
 
@@ -530,6 +549,8 @@ func (b *Builder) runStageJobsDAG(
 			case strings.TrimSpace(jb.Type) == "notify":
 				b.runNotifyJob(ctx, jrep, jb, r, stageResolved)
 				return nil
+			case strings.TrimSpace(jb.Type) == "health_check":
+				return b.runHealthCheckJob(ctx, jrep, jb)
 			default:
 				_ = jrep.Log(ctx, streamStdout, fmt.Sprintf("· %s(%s)— 真实执行未接入;本节点放行", jb.Name, jb.Type))
 				return nil
@@ -676,6 +697,86 @@ func (b *Builder) runBuildImageJobIsolated(
 	}
 	defer cleanup()
 	return b.runBuildImageJob(ctx, sink, rep, jb, stage.Name, proj, settings, r.Trigger.ResolvedEnvironment, ws, r, resolved, hasPushJob)
+}
+
+// runHealthCheckJob 执行一个 health_check 节点:在节点配置的 serverId 上做独立健康探测
+// (复用 deploy.Service.Probe,与部署后门控同一链路),探测失败 → 阶段失败、阻断下游。
+//
+// 配置项(对齐前端 health_check 表单):
+//   - serverId         : 目标服务器(复用 deploy_ssh 的 server 选择字段),必填。
+//   - probeMode        : http | command,必填(非空即不跳过)。
+//   - url              : http 探测目标(type=http 时用)。
+//   - command          : 命令探测字符串(type=command 时用;按空白切分为 array,绝不拼 shell,守 AC-SEC-02)。
+//   - retries          : 最大尝试次数(可选,默认 3)。
+//   - intervalSeconds  : 重试间隔秒数(可选,默认 3)。
+func (b *Builder) runHealthCheckJob(ctx context.Context, rep dagrun.StageReporter, jb pipeline.Job) error {
+	if b.deployer == nil {
+		_ = rep.Log(ctx, streamStderr, fmt.Sprintf("· 健康门控「%s」:部署服务未注入,无法真实探测;本节点放行(请检查后端部署服务注入)", jb.Name))
+		return nil
+	}
+	serverID := cfgString(jb.Config, "serverId")
+	if serverID == "" {
+		_ = rep.Log(ctx, streamStderr, fmt.Sprintf("健康门控「%s」未选目标服务器(serverId 空)", jb.Name))
+		return ErrBuildFailed
+	}
+	mode := strings.ToLower(strings.TrimSpace(cfgString(jb.Config, "probeMode")))
+	if mode != deploy.HealthCheckHTTP && mode != deploy.HealthCheckCommand {
+		// 门控配置错误(空 / 拼写错 / 未知)→ 阻断而非静默放行,避免"以为配了其实没生效"。
+		_ = rep.Log(ctx, streamStderr, fmt.Sprintf("健康门控「%s」探测模式(probeMode=%q)非法,应为 http 或 command", jb.Name, mode))
+		return ErrBuildFailed
+	}
+	hc := &deploy.HealthCheck{
+		Type:            mode,
+		URL:             cfgString(jb.Config, "url"),
+		Retries:         cfgInt(jb.Config, "retries"),
+		IntervalSeconds: cfgInt(jb.Config, "intervalSeconds"),
+	}
+	if mode == deploy.HealthCheckHTTP && strings.TrimSpace(hc.URL) == "" {
+		_ = rep.Log(ctx, streamStderr, fmt.Sprintf("健康门控「%s」http 模式缺少 url", jb.Name))
+		return ErrBuildFailed
+	}
+	if mode == deploy.HealthCheckCommand {
+		raw := cfgString(jb.Config, "command")
+		if raw == "" {
+			_ = rep.Log(ctx, streamStderr, fmt.Sprintf("健康门控「%s」command 模式缺少 command", jb.Name))
+			return ErrBuildFailed
+		}
+		// go-shlex 做 quote-aware 分词(保留 "a b" 内的空格),输出 array 经 target.Exec 直接执行,
+		// 不经 shell(守 AC-SEC-02);不可用 strings.Fields(会把引号内空格拆散导致命令语义错误)。
+		// posix=true:引号仅作分词语法、不进入参数(得到 Content-Type: application/json 而非带引号版本)。
+		parts, serr := shlex.Split(raw, true)
+		if serr != nil {
+			_ = rep.Log(ctx, streamStderr, fmt.Sprintf("健康门控「%s」command 分词失败:%s", jb.Name, serr.Error()))
+			return ErrBuildFailed
+		}
+		hc.Command = parts
+	}
+	if !hc.Enabled() {
+		// 理论不可达(上面已校验 mode),保留为兜底:未启用则放行不阻断。
+		_ = rep.Log(ctx, streamStdout, fmt.Sprintf("· 健康门控「%s」:探测模式(%s)未启用,本节点放行", jb.Name, mode))
+		return nil
+	}
+
+	_ = rep.Log(ctx, streamStdout, fmt.Sprintf("· 健康门控「%s」→ 服务器 %s [%s]", jb.Name, serverID, modeLabel(mode)))
+	err := b.deployer.Probe(ctx, serverID, hc)
+	if err != nil {
+		_ = rep.Log(ctx, streamStderr, fmt.Sprintf("健康门控「%s」未通过:%s", jb.Name, err.Error()))
+		return ErrBuildFailed
+	}
+	_ = rep.Log(ctx, streamStdout, fmt.Sprintf("· 健康门控「%s」探测通过,放行下游", jb.Name))
+	return nil
+}
+
+// modeLabel 把健康门控探测模式人读化。
+func modeLabel(mode string) string {
+	switch mode {
+	case deploy.HealthCheckHTTP:
+		return "HTTP 探测"
+	case deploy.HealthCheckCommand:
+		return "命令探测"
+	default:
+		return mode
+	}
 }
 
 // runDeployJob 执行一个 deploy_ssh 节点:把本 run 已产出的产物经 SSH 部署到节点配置的目标机
@@ -1174,6 +1275,28 @@ func cfgString(cfg map[string]any, key string) string {
 		return strings.TrimSpace(v)
 	}
 	return ""
+}
+
+// cfgInt 从自由 KV config 取整数值(非整数/缺失/空 → 0,交由调用方按默认值语义处理)。
+func cfgInt(cfg map[string]any, key string) int {
+	if cfg == nil {
+		return 0
+	}
+	switch v := cfg[key].(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	case string:
+		if s := strings.TrimSpace(v); s != "" {
+			if n, err := strconv.Atoi(s); err == nil {
+				return n
+			}
+		}
+	}
+	return 0
 }
 
 // gitSourceLogLines 为 git_source 节点拼出可读的源码信息(仓库 / 分支 / 提交 / 凭据)。

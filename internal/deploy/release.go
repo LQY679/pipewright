@@ -262,7 +262,7 @@ func (s *service) activateReleaseOne(ctx context.Context, srv *target.Server, a 
 	}
 
 	// 4) 切换之后跑健康门控(4-3);失败触发回滚。
-	if hc.enabled() {
+	if hc.Enabled() {
 		if herr := s.runHealthCheck(execCtx, srv.ID, hc); herr != nil {
 			return s.rollback(execCtx, srv, res, st.current, st.prev, st.release, herr.Error())
 		}
@@ -274,7 +274,7 @@ func (s *service) activateReleaseOne(ctx context.Context, srv *target.Server, a 
 
 	finish := time.Now().UTC()
 	res.Status = run.TargetSuccess
-	if hc.enabled() {
+	if hc.Enabled() {
 		res.Message = fmt.Sprintf("%s 零停机部署完成 → current → %s(健康检查通过)", a.Type, st.release)
 	} else {
 		res.Message = fmt.Sprintf("%s 零停机部署完成 → current → %s", a.Type, st.release)

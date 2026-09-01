@@ -133,7 +133,7 @@ func (s *service) activateImageOne(ctx context.Context, srv *target.Server, a ru
 	}
 
 	// 切后健康门控;失败触发回滚到上一镜像。
-	if hc.enabled() {
+	if hc.Enabled() {
 		if herr := s.runHealthCheck(execCtx, srv.ID, hc); herr != nil {
 			return s.rollbackImage(execCtx, srv, res, st, herr.Error())
 		}
@@ -141,7 +141,7 @@ func (s *service) activateImageOne(ctx context.Context, srv *target.Server, a ru
 
 	finish := time.Now().UTC()
 	res.Status = run.TargetSuccess
-	if hc.enabled() {
+	if hc.Enabled() {
 		res.Message = fmt.Sprintf("image %s部署完成 → 容器 %s(%s,健康检查通过)", modeLabel, st.name, st.ref)
 	} else {
 		res.Message = fmt.Sprintf("image %s部署完成 → 容器 %s(%s)", modeLabel, st.name, st.ref)

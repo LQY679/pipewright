@@ -442,6 +442,7 @@ export const JOB_TYPE_SPECS: Record<string, JobTypeSpec> = {
     accent: 'green',
     category: 'quality',
     fields: [
+      { key: 'serverId', get label() { return t('pipelineJob.fieldServerIdLabel') }, kind: 'server', get hint() { return t('pipelineJob.fieldServerIdHint') } },
       { key: 'probeMode', get label() { return t('pipelineJob.fieldProbeModeLabel') }, kind: 'select', options: PROBE_MODE_OPTIONS },
       {
         key: 'url',

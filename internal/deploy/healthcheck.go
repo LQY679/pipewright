@@ -62,8 +62,8 @@ type HealthCheck struct {
 	TimeoutSeconds int
 }
 
-// enabled 判定该健康检查是否需要执行(非 nil 且 type 为 http/command)。
-func (hc *HealthCheck) enabled() bool {
+// Enabled 判定该健康检查是否需要执行(非 nil 且 type 为 http/command)。供外部(如流水线 health_check 节点)判断。
+func (hc *HealthCheck) Enabled() bool {
 	if hc == nil {
 		return false
 	}
@@ -201,4 +201,16 @@ func healthCtxReason(err error) string {
 		return "整体超时"
 	}
 	return "已取消"
+}
+
+// Probe 是 deploy.Service.Probe 的实现:在指定目标机上独立做一次健康探测,
+// 供流水线 health_check 节点真实执行门控。直接复用 runHealthCheck(同一条 target.Exec 链路)。
+func (s *service) Probe(ctx context.Context, serverID string, hc *HealthCheck) error {
+	if !hc.Enabled() {
+		return errors.New("健康检查未启用(type 需为 http 或 command)")
+	}
+	if strings.TrimSpace(serverID) == "" {
+		return errors.New("健康检查缺少目标服务器 serverId")
+	}
+	return s.runHealthCheck(ctx, serverID, hc)
 }

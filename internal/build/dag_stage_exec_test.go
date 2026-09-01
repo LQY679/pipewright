@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -104,6 +105,18 @@ func newDAGTestBuilder(drv Driver, cl repoCloner) *Builder {
 		vault:    fakeVault{secrets: map[string]string{}},
 		driver:   drv,
 		cloner:   cl,
+	}
+}
+
+// newDAGTestBuilderWithDeployer 同 newDAGTestBuilder,但额外注入 deployer(供 health_check 节点测试)。
+func newDAGTestBuilderWithDeployer(drv Driver, cl repoCloner, dep deploy.Service) *Builder {
+	return &Builder{
+		projects: fakeProjects{proj: &project.Project{ID: "p1", RepoURL: "https://example.com/r.git"}},
+		settings: fakeSettings{settings: &pipeline.Settings{}},
+		vault:    fakeVault{secrets: map[string]string{}},
+		driver:   drv,
+		cloner:   cl,
+		deployer: dep,
 	}
 }
 
@@ -304,9 +317,10 @@ func TestStageExecutorNonScriptPlaceholder(t *testing.T) {
 	exec := NewStageExecutor(b, nil)
 	rep := &fakeReporter{}
 
-	// health_check 仍是未真实化的类型 → 走诚实占位放行(script/build_image/deploy_ssh/notify 已支持,其余占位)。
+	// 真正的未接入类型 → 走诚实占位放行(script/build_image/deploy_ssh/notify/health_check 已支持,其余占位)。
+	// 注:health_check 现已真实执行,此处用 unknown_type 验证兜底占位分支仍生效。
 	stage := pipeline.Stage{ID: "s", Name: "门禁", Kind: pipeline.KindCustom,
-		Jobs: []pipeline.Job{{Name: "health", Type: "health_check", Config: map[string]any{}}}}
+		Jobs: []pipeline.Job{{Name: "未知", Type: "unknown_type", Config: map[string]any{}}}}
 	if err := exec(context.Background(), &run.Run{ProjectID: "p1"}, stage, rep); err != nil {
 		t.Fatalf("exec: %v", err)
 	}
@@ -315,6 +329,26 @@ func TestStageExecutorNonScriptPlaceholder(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(rep.logs, "\n"), "真实执行未接入") {
 		t.Errorf("expected honest placeholder log, got %v", rep.logs)
+	}
+}
+
+// TestStageExecutorHealthCheckRealExec 证:纯 health_check 阶段会走真实执行路径
+// (经 job DAG 调度到 runHealthCheckJob),而不是被早期兜底分支按"未接入"放行。
+func TestStageExecutorHealthCheckRealExec(t *testing.T) {
+	dep := &stubStageDeployer{}
+	drv := &recordingDriver{}
+	b := newDAGTestBuilderWithDeployer(drv, &markerCloner{}, dep)
+	exec := NewStageExecutor(b, nil)
+	rep := &fakeReporter{}
+	stage := pipeline.Stage{ID: "s", Name: "门禁", Kind: pipeline.KindCustom,
+		Jobs: []pipeline.Job{{ID: "hc1", Name: "健康门控", Type: "health_check", Config: map[string]any{
+			"serverId": "srv-1", "probeMode": "http", "url": "https://example.com/h",
+		}}}}
+	if err := exec(context.Background(), &run.Run{ProjectID: "p1"}, stage, rep); err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	if !dep.probeCalled {
+		t.Error("纯 health_check 阶段应走到真实探测(Probe 被调用),不应被兜底放行")
 	}
 }
 
@@ -568,6 +602,12 @@ type stubStageDeployer struct {
 	gotCfg      map[string]string
 	gotStrategy string
 	gotServers  []string
+
+	// 健康门控 Probe 的调用捕获 + 可配置返回值(供 health_check 节点测试)。
+	probeCalled   bool
+	probeServerID string
+	probeHC       *deploy.HealthCheck
+	probeErr      error // 非 nil → Probe 返回该错误(模拟探测失败)
 }
 
 func (d *stubStageDeployer) Deploy(context.Context, deploy.DeployInput) ([]deploy.TargetResult, error) {
@@ -587,6 +627,12 @@ func (d *stubStageDeployer) DeployForStage(_ context.Context, _ string, serverID
 	d.gotStrategy = strategy
 	d.gotServers = serverIDs
 	return []deploy.TargetResult{{ServerName: "srv", Status: run.TargetSuccess, Message: "ok"}}, nil
+}
+func (d *stubStageDeployer) Probe(_ context.Context, serverID string, hc *deploy.HealthCheck) error {
+	d.probeCalled = true
+	d.probeServerID = serverID
+	d.probeHC = hc
+	return d.probeErr
 }
 
 // TestRunDeployJobPassesImageParams 证 #55:部署节点把镜像产物参数
@@ -673,6 +719,218 @@ func TestParseCacheConfigCommitMeta(t *testing.T) {
 	cc2 := parseCacheConfig(jb, nil)
 	if cc2.key != "cache-{{commit_sha}}" {
 		t.Fatalf("resolved 为空时占位应原样保留,got %q", cc2.key)
+	}
+}
+
+// ─── health_check 节点(真实门控)─────────────────────────────────────────────────
+
+// healthJob 构造一个 health_check 节点配置。
+func healthJob(cfg map[string]any) pipeline.Job {
+	return pipeline.Job{ID: "hc", Name: "健康门控", Type: "health_check", Config: cfg}
+}
+
+// TestRunHealthCheckJobProbeCalled 证:health_check 节点会真实调用 deployer.Probe,
+// 且入参(serverId / 探测模式 / url / 命令)正确透传;探测成功 → 不返回错误、日志含"探测通过"。
+func TestRunHealthCheckJobProbeCalled(t *testing.T) {
+	dep := &stubStageDeployer{}
+	b := &Builder{deployer: dep}
+	rep := &fakeReporter{}
+	jb := healthJob(map[string]any{
+		"serverId":        "srv-1",
+		"probeMode":       "http",
+		"url":             "https://example.com/healthz",
+		"retries":         5,
+		"intervalSeconds": 7,
+	})
+	if err := b.runHealthCheckJob(context.Background(), rep, jb); err != nil {
+		t.Fatalf("runHealthCheckJob 不应报错(err=%v)", err)
+	}
+	if !dep.probeCalled {
+		t.Fatal("health_check 节点应调用 deployer.Probe(真实执行未接入的门控不应再出现)")
+	}
+	if dep.probeServerID != "srv-1" {
+		t.Errorf("Probe serverId = %q, want srv-1", dep.probeServerID)
+	}
+	hc := dep.probeHC
+	if hc == nil {
+		t.Fatal("Probe 应收到 *HealthCheck")
+	}
+	if hc.Type != deploy.HealthCheckHTTP {
+		t.Errorf("hc.Type = %q, want http", hc.Type)
+	}
+	if hc.URL != "https://example.com/healthz" {
+		t.Errorf("hc.URL = %q, want https://example.com/healthz", hc.URL)
+	}
+	if hc.Retries != 5 || hc.IntervalSeconds != 7 {
+		t.Errorf("hc.Retries/Interval = %d/%d, want 5/7", hc.Retries, hc.IntervalSeconds)
+	}
+	if !strings.Contains(strings.Join(rep.logs, "\n"), "探测通过") {
+		t.Errorf("成功日志应含「探测通过」,got=%v", rep.logs)
+	}
+}
+
+// TestRunHealthCheckJobProbeFailureBlocks 证:deployer.Probe 返回错误时,
+// health_check 节点必须阻断阶段(返回 ErrBuildFailed),且日志含"未通过"。
+func TestRunHealthCheckJobProbeFailureBlocks(t *testing.T) {
+	dep := &stubStageDeployer{probeErr: errors.New("curl: exit 7 连接拒绝")}
+	b := &Builder{deployer: dep}
+	rep := &fakeReporter{}
+	jb := healthJob(map[string]any{
+		"serverId":  "srv-2",
+		"probeMode": "command",
+		"command":   "curl -fsS localhost:8080/healthz",
+	})
+	err := b.runHealthCheckJob(context.Background(), rep, jb)
+	if !errors.Is(err, ErrBuildFailed) {
+		t.Fatalf("探测失败应返回 ErrBuildFailed 阻断阶段,got err=%v", err)
+	}
+	if !dep.probeCalled {
+		t.Fatal("即便失败,也应先调用过 deployer.Probe")
+	}
+	if dep.probeHC == nil || len(dep.probeHC.Command) == 0 {
+		t.Fatalf("command 模式应透传 Command,got=%+v", dep.probeHC)
+	}
+	// 命令字符串按空白切分为 array(AC-SEC-02:不拼 shell)。
+	if got := strings.Join(dep.probeHC.Command, " "); got != "curl -fsS localhost:8080/healthz" {
+		t.Errorf("Command 数组拼接应为原命令,got=%q", got)
+	}
+	if !strings.Contains(strings.Join(rep.logs, "\n"), "未通过") {
+		t.Errorf("失败日志应含「未通过」,got=%v", rep.logs)
+	}
+}
+
+// TestRunHealthCheckJobMissingServerID 证:未选目标服务器时不调用 Probe,直接失败阻断。
+func TestRunHealthCheckJobMissingServerID(t *testing.T) {
+	dep := &stubStageDeployer{}
+	b := &Builder{deployer: dep}
+	rep := &fakeReporter{}
+	jb := healthJob(map[string]any{
+		"probeMode": "http",
+		"url":       "https://example.com/healthz",
+		// 故意缺 serverId
+	})
+	err := b.runHealthCheckJob(context.Background(), rep, jb)
+	if !errors.Is(err, ErrBuildFailed) {
+		t.Fatalf("缺 serverId 应返回 ErrBuildFailed,got err=%v", err)
+	}
+	if dep.probeCalled {
+		t.Error("缺 serverId 时不应调用 deployer.Probe")
+	}
+}
+
+// TestRunHealthCheckJobDeployerNil 证:部署服务未注入时诚实放行(不再冒充"真实执行"),
+// 日志必须提示「部署服务未注入」,避免误导用户以为做了真实探测。
+func TestRunHealthCheckJobDeployerNil(t *testing.T) {
+	b := &Builder{} // deployer == nil
+	rep := &fakeReporter{}
+	jb := healthJob(map[string]any{
+		"serverId":  "srv-3",
+		"probeMode": "http",
+		"url":       "https://example.com/healthz",
+	})
+	if err := b.runHealthCheckJob(context.Background(), rep, jb); err != nil {
+		t.Fatalf("deployer 未注入时应放行(nil),got err=%v", err)
+	}
+	if !strings.Contains(strings.Join(rep.logs, "\n"), "部署服务未注入") {
+		t.Errorf("deployer 未注入日志应提示「部署服务未注入」,got=%v", rep.logs)
+	}
+}
+
+// TestRunHealthCheckJobInvalidModeBlocks 证:probeMode 真非法(空 / 拼错 / 非 http|command)时门控应阻断阶段,
+// 而不是以前那样"未启用静默放行"——配置错误必须暴露,不能假装健康。
+// 注意:大小写 / 首尾空格已归一化兼容(http/HTTP/Command/" http " 都合法),此处只测真正非法的模式。
+func TestRunHealthCheckJobInvalidModeBlocks(t *testing.T) {
+	dep := &stubStageDeployer{}
+	b := &Builder{deployer: dep}
+	rep := &fakeReporter{}
+	for _, mode := range []string{"", "foo", "post", "HTTPX"} {
+		jb := healthJob(map[string]any{
+			"serverId":  "srv-1",
+			"probeMode": mode,
+			"url":       "https://example.com/h",
+		})
+		err := b.runHealthCheckJob(context.Background(), rep, jb)
+		if !errors.Is(err, ErrBuildFailed) {
+			t.Fatalf("probeMode=%q 应返回 ErrBuildFailed,got err=%v", mode, err)
+		}
+		if dep.probeCalled {
+			t.Fatalf("probeMode=%q 非法不应调用 deployer.Probe", mode)
+		}
+	}
+}
+
+// TestRunHealthCheckJobCommandQuotesPreserved 证:command 模式用 quote-aware 分词,
+// 引号内的空格(如 -H "Content-Type: application/json")不被拆散,保证命令语义正确(守 AC-SEC-02 不拼 shell)。
+func TestRunHealthCheckJobCommandQuotesPreserved(t *testing.T) {
+	dep := &stubStageDeployer{}
+	b := &Builder{deployer: dep}
+	rep := &fakeReporter{}
+	jb := healthJob(map[string]any{
+		"serverId":  "srv-1",
+		"probeMode": "command",
+		"command":   `curl -fsS -H "Content-Type: application/json" localhost:8080/healthz`,
+	})
+	if err := b.runHealthCheckJob(context.Background(), rep, jb); err != nil {
+		t.Fatalf("runHealthCheckJob err=%v(logs=%v)", err, rep.logs)
+	}
+	// 注意:引号是 shell 分词语法,shlex 解析后参数不带引号(空格保留)——这才是正确的命令参数。
+	want := []string{"curl", "-fsS", "-H", "Content-Type: application/json", "localhost:8080/healthz"}
+	if dep.probeHC == nil || !reflect.DeepEqual(dep.probeHC.Command, want) {
+		t.Fatalf("command 分词应保留引号内空格,got=%+v want=%+v", dep.probeHC.Command, want)
+	}
+}
+
+// TestRunHealthCheckJobProbeModeCaseInsensitive 证:probeMode 大小写 / 首尾空格归一化兼容,
+// HTTP / Command / " http " 都应被当作合法模式真实执行。
+func TestRunHealthCheckJobProbeModeCaseInsensitive(t *testing.T) {
+	dep := &stubStageDeployer{}
+	b := &Builder{deployer: dep}
+	rep := &fakeReporter{}
+	cases := []struct {
+		mode string
+		want string // 归一化后期望的 hc.Type
+	}{
+		{"HTTP", deploy.HealthCheckHTTP},
+		{"Command", deploy.HealthCheckCommand},
+		{" http ", deploy.HealthCheckHTTP},
+		{"COMMAND", deploy.HealthCheckCommand},
+	}
+	for _, c := range cases {
+		jb := healthJob(map[string]any{
+			"serverId":  "srv-1",
+			"probeMode": c.mode,
+			"url":       "https://example.com/h",
+			"command":   "curl -fsS localhost:8080/h",
+		})
+		if err := b.runHealthCheckJob(context.Background(), rep, jb); err != nil {
+			t.Fatalf("probeMode=%q 应合法,got err=%v", c.mode, err)
+		}
+		if !dep.probeCalled {
+			t.Fatalf("probeMode=%q 应调用 Probe", c.mode)
+		}
+		if dep.probeHC.Type != c.want {
+			t.Errorf("probeMode=%q → hc.Type=%q, want %q", c.mode, dep.probeHC.Type, c.want)
+		}
+		// 复位,避免影响下一次断言。
+		dep.probeCalled, dep.probeServerID, dep.probeHC, dep.probeErr = false, "", nil, nil
+	}
+}
+
+// TestRunHealthCheckJobHTTPMissingURL 证:http 模式缺 url → 阻断阶段(提前在校验层拦截,不调用 Probe)。
+func TestRunHealthCheckJobHTTPMissingURL(t *testing.T) {
+	dep := &stubStageDeployer{}
+	b := &Builder{deployer: dep}
+	rep := &fakeReporter{}
+	jb := healthJob(map[string]any{
+		"serverId":  "srv-1",
+		"probeMode": "http",
+		// 故意缺 url
+	})
+	if err := b.runHealthCheckJob(context.Background(), rep, jb); !errors.Is(err, ErrBuildFailed) {
+		t.Fatalf("http 缺 url 应返回 ErrBuildFailed,got err=%v", err)
+	}
+	if dep.probeCalled {
+		t.Error("http 缺 url 不应调用 deployer.Probe")
 	}
 }
 
